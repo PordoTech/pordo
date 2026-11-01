@@ -1,5 +1,9 @@
 # Pordo
 
+<p align="center">
+  <a href="https://linux.do"><img src="https://img.shields.io/badge/LINUX-DO-FFB003.svg" alt="LINUX DO"></a>
+</p>
+
 A media app for watching videos, listening to music and reading comics, with optional desktop AI subtitles and comic translation.
 
 ## Features
@@ -43,3 +47,7 @@ Built with Rust, egui/WGPU and CPAL. Windows and macOS source builds use [remdia
 See [building and testing](https://github.com/PordoTech/pordo/blob/main/docs/development.md), [architecture](https://github.com/PordoTech/pordo/blob/main/docs/architecture.md) and [release instructions](https://github.com/PordoTech/pordo/blob/main/docs/releasing.md). Component credits and licenses are listed in [third-party notices](docs/third-party.md).
 
 Originally developed with Qwen3.8 Max.
+
+## Acknowledgments
+
+- [Linux.do](https://linux.do)
