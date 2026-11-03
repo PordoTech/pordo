@@ -61,6 +61,25 @@ impl WebDav {
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             anyhow::bail!("WebDAV 请求过于频繁，请稍后重试 / WebDAV rate limited; try later");
         }
+        if response.status() == StatusCode::FORBIDDEN {
+            // DAV error bodies can contain account details or arbitrary HTML.
+            // Read a bounded prefix and expose only recognized error codes.
+            let mut body = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(Ok(part)) = stream.next().await {
+                let remaining = 8192 - body.len();
+                body.extend_from_slice(&part[..part.len().min(remaining)]);
+                if body.len() == 8192 {
+                    break;
+                }
+            }
+            if traffic_quota_exhausted(&body) {
+                anyhow::bail!(
+                    "WebDAV 流量额度已耗尽，请检查网盘流量额度 / WebDAV traffic quota exhausted; check your cloud storage quota (HTTP 403)"
+                );
+            }
+            anyhow::bail!("WebDAV 拒绝访问 / WebDAV access denied: HTTP 403");
+        }
         Ok(response)
     }
     pub async fn prepare(&self) -> Result<()> {
@@ -98,6 +117,9 @@ impl WebDav {
         Ok(bytes)
     }
     pub async fn list(&self) -> Result<Vec<String>> {
+        Ok(self.list_devices().await?.into_keys().collect())
+    }
+    async fn list_devices(&self) -> Result<BTreeMap<String, Option<String>>> {
         let response = self.request(Method::from_bytes(b"PROPFIND")?, "replayer/v1/devices/",
             Some(b"<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:getetag/></d:prop></d:propfind>".to_vec()),
             &[("Depth", "1"), ("Content-Type", "application/xml; charset=utf-8")]).await?;
@@ -108,7 +130,7 @@ impl WebDav {
         );
         let xml = String::from_utf8(Self::bytes(response).await?)?;
         let directory = self.root.join("replayer/v1/devices/")?;
-        list_paths(&xml, &directory)
+        device_listing(&xml, &directory)
     }
     async fn get(&self, path: &str) -> Result<Option<(Vec<u8>, Option<String>)>> {
         let response = self.request(Method::GET, path, None, &[]).await?;
@@ -127,7 +149,12 @@ impl WebDav {
             .map(str::to_owned);
         Ok(Some((Self::bytes(response).await?, etag)))
     }
-    pub(super) async fn put(&self, path: &str, bytes: Vec<u8>, etag: Option<&str>) -> Result<()> {
+    pub(super) async fn put(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        etag: Option<&str>,
+    ) -> Result<Option<String>> {
         ensure!(bytes.len() <= MAX_BODY, "Sync document exceeds size limit");
         let condition = etag.map_or(("If-None-Match", "*"), |e| ("If-Match", e));
         let response = self
@@ -143,19 +170,83 @@ impl WebDav {
             "WebDAV 写入失败或版本冲突 / WebDAV write failed or version changed: HTTP {}",
             response.status().as_u16()
         );
-        Ok(())
+        Ok(response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned))
     }
 }
+
+fn traffic_quota_exhausted(body: &[u8]) -> bool {
+    use quick_xml::{Reader, events::Event};
+    let Ok(xml) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) | Err(_) => return false,
+            Ok(Event::Start(e))
+                if e.local_name().as_ref() == "exception"
+                    && reader
+                        .read_text(e.name())
+                        .is_ok_and(|code| code.trim() == "TrafficRateExhausted") =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn list_paths(xml: &str, directory: &Url) -> Result<Vec<String>> {
+    Ok(device_listing(xml, directory)?.into_keys().collect())
+}
+fn device_listing(xml: &str, directory: &Url) -> Result<BTreeMap<String, Option<String>>> {
     use quick_xml::{Reader, events::Event};
     let mut reader = Reader::from_str(xml);
-    let mut paths = std::collections::BTreeSet::new();
+    let mut paths = BTreeMap::new();
+    let (mut href, mut etag, mut property_etag) = (None, None, None);
+    let mut property_ok = false;
     loop {
         match reader.read_event()? {
             Event::Eof => break,
+            Event::Start(e) if e.local_name().as_ref() == "response" => {
+                href = None;
+                etag = None;
+            }
+            Event::Start(e) if e.local_name().as_ref() == "propstat" => {
+                property_etag = None;
+                property_ok = false;
+            }
             Event::Start(e) if e.local_name().as_ref() == "href" => {
                 let text = reader.read_text(e.name())?;
-                let text = quick_xml::escape::unescape(&text)?;
+                let text = quick_xml::escape::unescape(&text)?.into_owned();
+                ensure!(
+                    directory.join(&text)?.origin() == directory.origin(),
+                    "Invalid sync device origin"
+                );
+                href = Some(text);
+            }
+            Event::Start(e) if e.local_name().as_ref() == "getetag" => {
+                let text = reader.read_text(e.name())?;
+                let text = quick_xml::escape::unescape(&text)?.into_owned();
+                if !text.is_empty() && text.len() <= 1024 {
+                    property_etag = Some(text);
+                }
+            }
+            Event::Start(e) if e.local_name().as_ref() == "status" => {
+                let text = reader.read_text(e.name())?;
+                property_ok = text.split_whitespace().nth(1) == Some("200");
+            }
+            Event::End(e) if e.local_name().as_ref() == "propstat" => {
+                if property_ok {
+                    etag = property_etag.take();
+                }
+            }
+            Event::End(e) if e.local_name().as_ref() == "response" => {
+                let Some(text) = href.take() else { continue };
                 let url = directory.join(&text)?;
                 ensure!(
                     url.origin() == directory.origin(),
@@ -166,14 +257,14 @@ pub fn list_paths(xml: &str, directory: &Url) -> Result<Vec<String>> {
                     && uuid::Uuid::parse_str(id).is_ok()
                     && !name.contains('/')
                 {
-                    paths.insert(format!("replayer/v1/devices/{name}"));
+                    paths.insert(format!("replayer/v1/devices/{name}"), etag.take());
                 }
             }
             _ => {}
         }
     }
     ensure!(paths.len() <= 256, "Too many sync devices");
-    Ok(paths.into_iter().collect())
+    Ok(paths)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -216,19 +307,34 @@ pub async fn run(
     let own = format!("replayer/v1/devices/{}.json", settings.device_id);
     let mut own_etag = None;
     let mut own_exists = false;
-    let mut paths = http.list().await?;
-    if !paths.contains(&own) {
-        paths.push(own.clone());
-    }
-    for path in paths {
+    let mut paths = http.list_devices().await?;
+    journal
+        .remote_etags
+        .retain(|path, _| paths.contains_key(path));
+    paths.entry(own.clone()).or_default();
+    for (path, listed_etag) in paths {
+        if let Some(etag) = &listed_etag
+            && journal.remote_etags.get(&path) == Some(etag)
+        {
+            // The journal already contains this document's merged operations.
+            if path == own {
+                own_exists = true;
+                own_etag = listed_etag;
+            }
+            continue;
+        }
+        journal.remote_etags.remove(&path);
         if let Some((bytes, etag)) = http.get(&path).await? {
             if path == own {
                 own_exists = true;
-                own_etag = etag;
+                own_etag = etag.clone();
             }
             let remote: Document = serde_json::from_slice(&bytes)
                 .map_err(|_| anyhow::anyhow!("云端同步数据无效 / Invalid cloud sync data"))?;
             journal.merge(&remote)?;
+            if let Some(etag) = etag {
+                journal.remote_etags.insert(path, etag);
+            }
         }
     }
     let mut decrypted = BTreeMap::new();
@@ -257,12 +363,17 @@ pub async fn run(
             !own_exists || own_etag.is_some(),
             "WebDAV 服务未提供版本校验 / WebDAV server did not provide an ETag"
         );
-        http.put(
-            &own,
-            serde_json::to_vec(&journal.document)?,
-            own_etag.as_deref(),
-        )
-        .await?;
+        let etag = http
+            .put(
+                &own,
+                serde_json::to_vec(&journal.document)?,
+                own_etag.as_deref(),
+            )
+            .await?;
+        journal.remote_etags.remove(&own);
+        if let Some(etag) = etag {
+            journal.remote_etags.insert(own, etag);
+        }
         journal.uploaded = digest;
     }
     journal.last_success = crate::comics::now();
@@ -275,7 +386,14 @@ pub async fn run(
 pub async fn test(settings: Settings) -> Result<()> {
     let http = WebDav::new(&settings)?;
     http.prepare().await?;
-    http.list().await?;
+    let paths = http.list().await?;
+    let own = format!("replayer/v1/devices/{}.json", settings.device_id);
+    if let Some(path) = paths.iter().find(|p| **p == own).or_else(|| paths.first()) {
+        // A tiny probe may succeed even when the account cannot download an
+        // existing sync document (e.g. its remaining traffic quota is 167 B).
+        // Read one representative document without modifying it or merging data.
+        http.get(path).await?;
+    }
     // Check write/read access in an isolated probe. Never touch a device document.
     let path = format!("replayer/v1/probe-{}.json", uuid::Uuid::new_v4());
     http.put(&path, b"{}".to_vec(), None).await?;

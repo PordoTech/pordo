@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.json.JSONObject
 import java.util.UUID
 
@@ -31,10 +32,10 @@ object CloudSync {
     // Serialize local music/credential writes with the short apply phase, never with network IO.
     val localLock = Any()
     private var app: Context? = null
-    private var foreground = false
     @Volatile private var generation = 0L
     @Volatile private var dirty: Job? = null
-    @Volatile private var retryAfter = 0L
+    private var pendingSync = false
+    private var pendingProgress = false
 
     fun initialize(context: Context) {
         if (app != null) return
@@ -42,18 +43,18 @@ object CloudSync {
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { MusicRepository.apiKey(context) } }
                 .onFailure { mutableState.update { state -> state.copy(message = it.message ?: "凭据读取失败", failed = true) } }
-            while (true) {
-                delay(300_000)
-                if (foreground) synchronize()
-            }
         }
     }
 
     fun foreground(active: Boolean) {
-        foreground = active
-        if (active) synchronize() else if (dirty?.isActive == true) {
-            dirty?.cancel()
-            synchronize()
+        if (active) synchronize() else checkpoint()
+    }
+
+    fun checkpoint() {
+        scope.launch {
+            // Let reader/player disposal persist its latest local position first.
+            yield()
+            synchronize(includeProgress = true)
         }
     }
 
@@ -80,7 +81,6 @@ object CloudSync {
             copy.remove("device_id") // This installation's identity cannot be imported from another device.
             check(context.getSharedPreferences("cloud", Context.MODE_PRIVATE).edit().putString("config", copy.toString()).commit())
             generation++
-            retryAfter = 0
             mutableState.value = SyncState(message = if (copy.optBoolean("enabled")) "等待同步" else "未启用")
         }
         synchronize()
@@ -88,15 +88,15 @@ object CloudSync {
 
     fun changed(progressOnly: Boolean = false) {
         mutableRevision.update { it + 1 }
+        if (progressOnly) return
         scope.launch {
             val context = app ?: return@launch
             val enabled = JSONObject(context.getSharedPreferences("cloud", Context.MODE_PRIVATE)
                 .getString("config", "{}")!!).optBoolean("enabled")
             if (!enabled) return@launch
             mutableState.update { if (it.busy) it else it.copy(message = "等待同步") }
-            if (progressOnly && dirty?.isActive == true) return@launch
             dirty?.cancel()
-            dirty = launch { delay(if (progressOnly) 30_000 else 5_000); synchronize() }
+            dirty = launch { delay(5_000); synchronize() }
         }
     }
 
@@ -110,11 +110,19 @@ object CloudSync {
         JSONObject(SecretStore.get(context, "sync/$account/keys").ifEmpty { "{}" })
             .put("music/chksz", MusicRepository.apiKey(context))
 
-    fun synchronize(manual: Boolean = false, probe: JSONObject? = null) {
+    fun synchronize(manual: Boolean = false, probe: JSONObject? = null, includeProgress: Boolean = false) {
         val context = app ?: return
         scope.launch {
-            if (!manual && System.currentTimeMillis() < retryAfter) return@launch
-            if (!operation.tryLock()) return@launch
+            if (probe == null) pendingProgress = pendingProgress || includeProgress || manual
+            if (!operation.tryLock()) {
+                if (probe == null) pendingSync = true
+                return@launch
+            }
+            val captureProgress = probe == null && pendingProgress
+            if (probe == null) {
+                pendingProgress = false
+                pendingSync = false
+            }
             val token = generation
             try {
                 val config = withContext(Dispatchers.IO) { probe ?: config(context) }
@@ -125,6 +133,7 @@ object CloudSync {
                 withContext(Dispatchers.IO) {
                     // Native returns the account fingerprint without serializing transport credentials.
                     val start = JSONObject().put("config", config).put("probe", probe != null)
+                        .put("includeProgress", captureProgress)
                     // Account partitioning uses the same SHA-256 identity as desktop Settings::account.
                     val identity = config.optString("base_url").trim().trimEnd('/') + "\u0000" + config.optString("username").trim()
                     val account = sha256(identity)
@@ -154,19 +163,17 @@ object CloudSync {
                         val pending = result.optBoolean("pending") || dirty?.isActive == true
                         mutableState.value = SyncState(busy = true, message = if (pending) "等待同步" else "同步完成",
                             lastSuccess = result.getLong("lastSuccess"))
-                        retryAfter = 0
                         if (result.optBoolean("pending")) changed()
                     }
                 }
             } catch (error: Exception) {
                 if (token == generation) {
-                    retryAfter = System.currentTimeMillis() + 300_000
                     mutableState.update { it.copy(message = error.message ?: "同步失败", failed = true) }
                 }
             } finally {
                 if (token == generation) mutableState.update { it.copy(busy = false) }
                 operation.unlock()
-                if (token != generation) synchronize()
+                if (token != generation || pendingSync) synchronize(includeProgress = pendingProgress)
             }
         }
     }

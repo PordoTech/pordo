@@ -23,7 +23,8 @@ try {
             }
         }
     }
-    . "$PSScriptRoot/setup-windows.ps1"
+    # The bundled remdia factories are compiled with the player. Preview needs
+    # no separately staged SDK runtime or release capability-pack build.
     cargo build --locked --bin pordo
     if ($LASTEXITCODE -ne 0) { throw 'Preview build failed; no executable was launched.' }
     $plugins = Join-Path (Split-Path -Parent $previewExe) 'plugins'

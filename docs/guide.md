@@ -83,6 +83,8 @@ Only explicitly requested audio segments are sent to the selected AI service, no
 
 Configure an HTTPS WebDAV service in **Settings → Cloud Sync**, test the connection, then enable sync. Use the same account on another device. Offline changes stay local and are merged after reconnecting.
 
+Sync runs on startup, manual requests and changes to favorites or settings, without periodic polling. Reading and playback progress is saved locally and submitted when leaving the reader/player or closing the app. Unchanged device files are skipped using their ETags. Desktop shutdown waits up to eight seconds for pending sync; unfinished uploads remain saved for the next startup.
+
 Sync covers supported service/model settings, comic and online-music favorites, reading/listening progress and related preferences. It does not upload local media files or paths, playback queues, downloaded audio, covers, comic pages, translated images or subtitle caches.
 
 API keys are excluded by default. To sync them, enable the option and use the same separate sync passphrase on all devices; keep the original passphrase available when changing it. WebDAV passwords and the passphrase itself are not uploaded. A wrong passphrase stops writes rather than replacing existing encrypted keys.

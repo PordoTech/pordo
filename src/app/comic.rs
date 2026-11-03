@@ -379,6 +379,15 @@ impl State {
     pub(super) fn reading(&self) -> bool {
         self.view == View::Reader
     }
+    pub(super) fn reading_session(&self) -> Option<String> {
+        self.reading().then_some(())?;
+        let reader = self.reader.as_ref()?;
+        Some(format!(
+            "comic:{}:{}",
+            reader.book.key(),
+            reader.chapter.key()
+        ))
+    }
     pub(super) fn toolbar_visible(&self) -> bool {
         self.reader
             .as_ref()

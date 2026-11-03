@@ -628,6 +628,10 @@ impl eframe::App for App {
         let ctx = root.ctx().clone();
         self.updater.poll();
         self.poll_cloud(&ctx);
+        self.poll_cloud_close(&ctx);
+        if self.cloud_closing() {
+            root.disable();
+        }
         self.fullscreen = window::fullscreen_shortcuts(&ctx);
         if self.updater.dialog_visible {
             ctx.input_mut(|i| {

@@ -31,6 +31,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(onBack: () -> Unit) {
+    DisposableEffect(Unit) {
+        onDispose { dev.pordo.sync.CloudSync.checkpoint() }
+    }
     val state by Playback.state.collectAsStateWithLifecycle()
     val track = state.track
     Scaffold(

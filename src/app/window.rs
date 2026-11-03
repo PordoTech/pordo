@@ -289,10 +289,7 @@ impl App {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized))
                             }
                             _ => {
-                                self.update_library();
-                                self.library.flush();
-                                self.comic.flush();
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                self.request_cloud_close(&ctx);
                             }
                         }
                     }

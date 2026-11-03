@@ -118,6 +118,9 @@ internal class PageFetcher(cacheBytes: Int, concurrency: Int) {
 @OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun ReaderScreen(onBack: () -> Unit) {
+    DisposableEffect(Unit) {
+        onDispose { dev.pordo.sync.CloudSync.checkpoint() }
+    }
     val bookJson = AppNav.bookJson
     val chapterJson = AppNav.chapterJson
     val entryJson = AppNav.entryJson

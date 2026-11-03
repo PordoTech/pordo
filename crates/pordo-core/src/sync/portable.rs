@@ -5,6 +5,40 @@ use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+pub fn progress_key(key: &str) -> bool {
+    key.ends_with("/progress")
+        || key.starts_with("comic/") && matches!(key.split('/').nth(2), Some("read" | "unread"))
+}
+
+/// Keep local reading/playback edits out of metadata-only synchronization,
+/// including newly created progress and removed chapter flags.
+pub fn defer_progress(snapshot: &mut Snapshot, baseline: &Snapshot) {
+    snapshot.retain(|key, _| !progress_key(key));
+    snapshot.extend(
+        baseline
+            .iter()
+            .filter(|(key, _)| progress_key(key))
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+}
+
+/// A response must not rewind progress edited locally while it was in flight.
+pub fn preserve_local_progress(values: &mut Snapshot, local: &Snapshot, baseline: &Snapshot) {
+    for key in local
+        .keys()
+        .chain(baseline.keys())
+        .filter(|key| progress_key(key))
+    {
+        if local.get(key) != baseline.get(key) {
+            if let Some(value) = local.get(key) {
+                values.insert(key.clone(), value.clone());
+            } else {
+                values.remove(key);
+            }
+        }
+    }
+}
+
 pub fn mobile_defaults() -> Snapshot {
     let defaults = crate::music_sources::Settings::default();
     Snapshot::from([
@@ -40,19 +74,22 @@ pub fn finish_mobile(
     requested_secrets: &BTreeMap<String, String>,
     existing: &[Entry],
 ) -> Result<Applied> {
-    journal.capture(
-        mobile_snapshot(mobile, &journal, existing)?,
-        &mobile_defaults(),
-    );
+    let local = mobile_snapshot(mobile, &journal, existing)?;
+    let baseline = journal.observed.clone();
+    let mut captured = local.clone();
+    defer_progress(&mut captured, &baseline);
+    journal.capture(captured, &mobile_defaults());
     journal.merge(&report.journal.document)?;
     let values = journal.values();
-    let mobile: Snapshot = values
+    let mut applied_values = values.clone();
+    preserve_local_progress(&mut applied_values, &local, &baseline);
+    let mobile: Snapshot = applied_values
         .iter()
         .filter(|(k, _)| mobile_key(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     validate_mobile(&mobile)?;
-    let entries = apply_comics(&values, existing)?;
+    let entries = apply_comics(&applied_values, existing)?;
     for (id, key) in report.secrets {
         if secrets.get(&id) == requested_secrets.get(&id) {
             secrets.insert(id, key);
@@ -61,12 +98,14 @@ pub fn finish_mobile(
     journal.uploaded = report.journal.uploaded;
     journal.last_success = report.journal.last_success;
     journal.secret_hashes = report.journal.secret_hashes;
-    let observed = mobile_snapshot(mobile.clone(), &journal, &entries)?;
+    journal.remote_etags = report.journal.remote_etags;
+    let mut observed = mobile_snapshot(mobile.clone(), &journal, &entries)?;
     for (key, value) in &values {
-        if key.starts_with("comic/") && observed.get(key) != Some(value) {
+        if key.starts_with("comic/") && !progress_key(key) && observed.get(key) != Some(value) {
             journal.write(key.clone(), observed.get(key).cloned());
         }
     }
+    defer_progress(&mut observed, &values);
     journal.observed = observed;
     Ok(Applied {
         journal,

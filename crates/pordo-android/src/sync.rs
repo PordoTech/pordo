@@ -91,10 +91,11 @@ pub extern "system" fn Java_dev_pordo_Native_nativeSyncExchange(
         let mut journal = Journal::load(&path, &device)?;
         {
             let library = comics::locked(comics::library()?)?;
-            journal.capture(
-                portable::mobile_snapshot(mobile, &journal, &library.entries)?,
-                &portable::mobile_defaults(),
-            );
+            let mut snapshot = portable::mobile_snapshot(mobile, &journal, &library.entries)?;
+            if !request["includeProgress"].as_bool().unwrap_or(true) {
+                portable::defer_progress(&mut snapshot, &journal.observed);
+            }
+            journal.capture(snapshot, &portable::mobile_defaults());
             // Persist local operations before touching the network; offline edits survive restart.
             journal.save(&path)?;
         }

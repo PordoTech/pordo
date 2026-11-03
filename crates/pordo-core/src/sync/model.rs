@@ -29,6 +29,9 @@ pub struct Journal {
     pub uploaded: String,
     pub last_success: u64,
     pub secret_hashes: BTreeMap<String, String>,
+    // Local transport state only; never included in the uploaded Document.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote_etags: BTreeMap<String, String>,
 }
 fn dominates(a: &Entry, b: &Entry) -> bool {
     b.clock

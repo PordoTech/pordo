@@ -18,6 +18,41 @@ fn journal(device: &str) -> Journal {
     }
 }
 
+#[test]
+fn progress_is_deferred_until_checkpoint_and_inflight_edits_survive_a_remote_reply() {
+    let baseline = values(&[
+        ("comic/a/progress", json!(1)),
+        ("comic/a/read/old", json!("old")),
+        ("song/x/progress", json!(10)),
+    ]);
+    let local = values(&[
+        ("comic/a/progress", json!(2)),
+        ("comic/a/read/new", json!("new")),
+        ("song/x/progress", json!(20)),
+        ("song/new/progress", json!(5)),
+        ("song/x/favorite", json!(true)),
+    ]);
+    let mut captured = local.clone();
+    portable::defer_progress(&mut captured, &baseline);
+    assert_eq!(captured["comic/a/progress"], json!(1));
+    assert_eq!(captured["song/x/progress"], json!(10));
+    assert!(captured.contains_key("comic/a/read/old"));
+    assert!(!captured.contains_key("song/new/progress"));
+    assert!(!captured.contains_key("comic/a/read/new"));
+    assert_eq!(captured["song/x/favorite"], json!(true));
+    let mut remote = baseline.clone();
+    remote.insert("song/other/progress".into(), json!(99));
+    portable::preserve_local_progress(&mut remote, &local, &baseline);
+    assert_eq!(remote["comic/a/progress"], json!(2));
+    assert_eq!(remote["song/new/progress"], json!(5));
+    assert_eq!(remote["song/other/progress"], json!(99));
+    assert!(!remote.contains_key("comic/a/read/old"));
+    let mut j = journal("test");
+    j.capture(captured, &Snapshot::new());
+    j.capture(local, &Snapshot::new());
+    assert_eq!(j.values()["song/x/progress"], json!(20));
+}
+
 #[tokio::test]
 async fn desktop_and_mobile_exchange_comic_progress_without_erasing_unsupported_settings() {
     use crate::comics::{
@@ -296,6 +331,11 @@ struct Objects {
     files: Mutex<BTreeMap<String, (Vec<u8>, usize)>>,
     writes: AtomicUsize,
     fail: AtomicBool,
+    traffic_exhausted: AtomicBool,
+    read_forbidden: AtomicBool,
+    omit_listing_etags: AtomicBool,
+    downloads: AtomicUsize,
+    downloaded_bytes: AtomicUsize,
 }
 struct Server {
     url: String,
@@ -342,14 +382,28 @@ impl Server {
                 "MKCOL" => response(201, vec![], None),
                 "PROPFIND" => {
                     let mut xml = String::from("<d:multistatus xmlns:d=\"DAV:\">");
-                    for key in files.keys().filter(|p| p.starts_with(&path)) {
-                        xml.push_str(&format!("<d:response><d:href>{key}</d:href></d:response>"));
+                    for (key, (_, n)) in files.iter().filter(|(p, _)| p.starts_with(&path)) {
+                        let status = if objects.omit_listing_etags.load(Ordering::Relaxed) { 404 } else { 200 };
+                        xml.push_str(&format!("<d:response><d:href>{key}</d:href><d:propstat><d:prop><d:getetag>&quot;{n}&quot;</d:getetag></d:prop><d:status>HTTP/1.1 {status} Status</d:status></d:propstat></d:response>"));
                     }
                     xml.push_str("</d:multistatus>");
                     response(207, xml.into_bytes(), None)
                 }
                 "GET" => match files.get(&path) {
-                    Some((body, n)) => response(200, body.clone(), Some(format!("\"{n}\""))),
+                    Some((body, _))
+                        if body.len() > 2
+                            && objects.traffic_exhausted.load(Ordering::Relaxed) =>
+                    {
+                        response(403, br#"<?xml version="1.0"?><d:error xmlns:d="DAV:" xmlns:s="http://ns.jianguoyun.com"><s:exception>TrafficRateExhausted</s:exception><s:message>The downstream traffic rate is exhausted. The free rate is 167 while you want to consume 246501. private-account-detail</s:message></d:error>"#.to_vec(), None)
+                    }
+                    Some(_) if objects.read_forbidden.load(Ordering::Relaxed) => {
+                        response(403, b"<html>private-account-detail: permission denied</html>".to_vec(), None)
+                    }
+                    Some((body, n)) => {
+                        objects.downloads.fetch_add(1, Ordering::Relaxed);
+                        objects.downloaded_bytes.fetch_add(body.len(), Ordering::Relaxed);
+                        response(200, body.clone(), Some(format!("\"{n}\"")))
+                    }
                     None => response(404, vec![], None),
                 },
                 "PUT" => {
@@ -492,6 +546,67 @@ async fn encrypted_partition_survives_devices_without_keys_and_wrong_phrase_does
 }
 
 #[tokio::test]
+async fn etags_skip_unchanged_downloads_across_restart_and_refresh_only_changed_devices() {
+    let server = Server::new().await;
+    let a = server.settings();
+    let b = server.settings();
+    let mut ja = journal(&a.device_id);
+    ja.write("comic/x/favorite".into(), Some(json!(true)));
+    ja = webdav::run(a.clone(), ja, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    let jb = webdav::run(b.clone(), journal(&b.device_id), BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(jb.remote_etags.len(), 2);
+    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-data/sync")
+        .join(uuid::Uuid::new_v4().to_string());
+    let path = directory.join("journal.json");
+    jb.save(&path).unwrap();
+    let jb = Journal::load(&path, &b.device_id).unwrap();
+    server.objects.downloads.store(0, Ordering::Relaxed);
+    server.objects.downloaded_bytes.store(0, Ordering::Relaxed);
+    let writes = server.objects.writes.load(Ordering::Relaxed);
+    let mut jb = webdav::run(b.clone(), jb, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(server.objects.downloads.load(Ordering::Relaxed), 0);
+    assert_eq!(server.objects.downloaded_bytes.load(Ordering::Relaxed), 0);
+    assert_eq!(server.objects.writes.load(Ordering::Relaxed), writes);
+    ja.write("comic/x/favorite".into(), Some(json!(false)));
+    webdav::run(a.clone(), ja, BTreeMap::new()).await.unwrap();
+    server.objects.downloads.store(0, Ordering::Relaxed);
+    jb = webdav::run(b.clone(), jb, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(server.objects.downloads.load(Ordering::Relaxed), 1);
+    assert_eq!(jb.values()["comic/x/favorite"], json!(false));
+    server.objects.downloads.store(0, Ordering::Relaxed);
+    jb = webdav::run(b.clone(), jb, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(server.objects.downloads.load(Ordering::Relaxed), 0);
+    // If PROPFIND cannot return a usable ETag, download rather than trusting a
+    // stale cached version. A failed getetag propstat must not count as success.
+    server
+        .objects
+        .omit_listing_etags
+        .store(true, Ordering::Relaxed);
+    webdav::run(b, jb, BTreeMap::new()).await.unwrap();
+    assert_eq!(server.objects.downloads.load(Ordering::Relaxed), 2);
+    for (bytes, _) in server.objects.files.lock().unwrap().values() {
+        assert!(!String::from_utf8_lossy(bytes).contains("remote_etags"));
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
 async fn connection_probe_leaves_no_files_and_conditional_put_prevents_overwriting() {
     let server = Server::new().await;
     let settings = server.settings();
@@ -519,6 +634,74 @@ async fn connection_probe_leaves_no_files_and_conditional_put_prevents_overwriti
         server.objects.files.lock().unwrap()["/dav/replayer/v1/check.json"].0,
         b"first"
     );
+}
+
+#[tokio::test]
+async fn connection_probe_detects_document_quota_failures_without_changing_cloud_data() {
+    let server = Server::new().await;
+    let settings = server.settings();
+    server
+        .objects
+        .traffic_exhausted
+        .store(true, Ordering::Relaxed);
+    // Exactly the observed service behavior: an empty account's tiny write/read
+    // probe works, but an existing device document exceeds its remaining quota.
+    webdav::test(settings.clone()).await.unwrap();
+    let path = format!("/dav/replayer/v1/devices/{}.json", settings.device_id);
+    let mut document = serde_json::to_vec(&journal(&settings.device_id).document).unwrap();
+    document.resize(246_501, b' ');
+    server
+        .objects
+        .files
+        .lock()
+        .unwrap()
+        .insert(path.clone(), (document.clone(), 7));
+    let writes = server.objects.writes.load(Ordering::Relaxed);
+    for error in [
+        webdav::test(settings.clone()).await.err().unwrap(),
+        webdav::run(
+            settings.clone(),
+            journal(&settings.device_id),
+            BTreeMap::new(),
+        )
+        .await
+        .err()
+        .unwrap(),
+    ] {
+        let message = error.to_string();
+        assert!(message.contains("traffic quota exhausted"), "{message}");
+        assert!(!message.contains("private-account-detail"));
+    }
+    assert_eq!(writes, server.objects.writes.load(Ordering::Relaxed));
+    {
+        let files = server.objects.files.lock().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[&path], (document, 7));
+    }
+    server
+        .objects
+        .traffic_exhausted
+        .store(false, Ordering::Relaxed);
+    webdav::test(settings).await.unwrap();
+    assert_eq!(server.objects.files.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn forbidden_document_permissions_are_not_misreported_as_exhausted_quota() {
+    let server = Server::new().await;
+    let settings = server.settings();
+    let path = format!("/dav/replayer/v1/devices/{}.json", settings.device_id);
+    server
+        .objects
+        .files
+        .lock()
+        .unwrap()
+        .insert(path, (b"{}".to_vec(), 1));
+    server.objects.read_forbidden.store(true, Ordering::Relaxed);
+    let message = webdav::test(settings).await.err().unwrap().to_string();
+    assert!(message.contains("access denied"));
+    assert!(!message.contains("quota") && !message.contains("private-account-detail"));
+    assert_eq!(server.objects.writes.load(Ordering::Relaxed), 0);
 }
 
 #[test]
