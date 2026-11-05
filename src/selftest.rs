@@ -133,7 +133,32 @@ fn seek(p: &mut Player, target: f64) -> Result<()> {
 }
 pub fn run(path: String) -> Result<()> {
     let open_start = Instant::now();
-    let mut p = Player::open(path)?;
+    exercise(Player::open(path)?, open_start)
+}
+pub fn bilibili(id: String) -> Result<()> {
+    use crate::bilibili::{Bilibili, start};
+    let source = crate::jobs::block_on(async move {
+        let api = std::sync::Arc::new(Bilibili::new(None)?);
+        let id = crate::bilibili::video_id(&id).context("provide a BV ID or Bilibili video URL")?;
+        let detail = api.detail(&id).await?;
+        let playback = api.resolve(&id, detail.parts[0].cid, 16).await?;
+        ensure!(
+            playback.audio.is_some(),
+            "sample has no separate audio stream"
+        );
+        start(api, playback).await
+    })?;
+    let open_start = Instant::now();
+    exercise(
+        Player::open_split(
+            source.video.clone(),
+            source.audio.clone(),
+            Some(source.duration),
+        )?,
+        open_start,
+    )
+}
+fn exercise(mut p: Player, open_start: Instant) -> Result<()> {
     p.set_volume(0.0);
     ensure!(
         open_start.elapsed() < Duration::from_millis(500),

@@ -66,6 +66,8 @@ struct Shared {
     cancel: remdia::Cancellation,
     progressive: bool,
     source_key: Option<String>,
+    audio_source: Option<String>,
+    duration_hint: Option<f64>,
     desired_playing: AtomicBool,
     stop: Arc<AtomicBool>,
     output: Arc<OutputControl>,
@@ -93,7 +95,19 @@ impl Player {
     pub fn open_with_qq_key(path: String, ekey: String) -> Result<Self> {
         Self::open_source(path, false, Some(ekey))
     }
+    pub fn open_split(video: String, audio: Option<String>, duration: Option<f64>) -> Result<Self> {
+        Self::open_inputs(video, false, None, audio, duration)
+    }
     fn open_source(path: String, progressive: bool, source_key: Option<String>) -> Result<Self> {
+        Self::open_inputs(path, progressive, source_key, None, None)
+    }
+    fn open_inputs(
+        path: String,
+        progressive: bool,
+        source_key: Option<String>,
+        audio_source: Option<String>,
+        duration_hint: Option<f64>,
+    ) -> Result<Self> {
         let (commands, command_rx) = unbounded();
         let (frame_tx, frames) = bounded(3);
         let stale_frames = frames.clone();
@@ -114,6 +128,8 @@ impl Player {
             cancel: remdia::Cancellation::with_requested_generation(requested),
             progressive,
             source_key,
+            audio_source,
+            duration_hint,
             desired_playing: AtomicBool::new(true),
             stop: Arc::new(AtomicBool::new(false)),
             output: Arc::new(OutputControl::new()),

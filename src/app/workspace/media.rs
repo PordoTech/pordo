@@ -52,6 +52,10 @@ impl App {
         self.play_queue(0);
     }
     pub(in crate::app) fn play_record(&mut self, record: Record, resume: bool) {
+        if let Some(bvid) = crate::bilibili::video_id(&record.path) {
+            self.open_bilibili_record(bvid, &record, resume);
+            return;
+        }
         self.update_library();
         self.comic.flush();
         self.set_active_queue(record.music);
@@ -85,7 +89,9 @@ impl App {
         if !ui.is_rect_visible(rect) {
             return;
         }
-        if !record.path.starts_with("online://") {
+        if !record.path.starts_with("online://")
+            && crate::bilibili::video_id(&record.path).is_none()
+        {
             self.metadata_cache
                 .request(&record.path, &self.metadata_requests);
         } else if self
@@ -262,6 +268,19 @@ impl App {
             if self.workspace.music_tab == 1 {
                 self.online_music_contents(ui);
                 return;
+            }
+        }
+        if page == Page::Video {
+            let labels = [l.text("收藏", "Favorites"), l.text("搜索", "Search")];
+            let previous = self.workspace.video_tab;
+            design::tabs(ui, &mut self.workspace.video_tab, &labels);
+            ui.add_space(12.0);
+            if self.workspace.video_tab == 1 {
+                self.online_video_contents(ui);
+                return;
+            }
+            if previous != self.workspace.video_tab {
+                self.online_video.cancel_discovery();
             }
         }
         let mut records = self.records();

@@ -52,6 +52,8 @@ cargo test --locked
 
 Use `PORDO_SETTINGS_FILE` pointing inside `target/` to isolate developer settings. Ordinary tests use committed synthetic media and local mock services, and do not consume model credits. Set `PORDO_NATIVE_FIXTURES` to `.deps/remdia-source/tests/fixtures` and run `cargo test --locked native_media -- --ignored --nocapture` for the real plugin tests.
 
+Bilibili protocol and loopback tests run offline in the ordinary suite. The native media tests include separate audio/video pause, seek, EOF and replay. To explicitly test public Bilibili playback without reading saved account credentials, run `target/debug/pordo --selftest-bilibili BV1GJ411x7h7` (`target/debug/pordo.exe` on Windows). `cargo test --locked live_bilibili_qr -- --ignored --nocapture` generates a QR code and checks its pending state without completing a login. Both contact Bilibili and may encounter service verification or availability limits; they are not part of offline CI. Complete a real account scan manually through the app.
+
 Additional checks are explicit:
 
 ```text

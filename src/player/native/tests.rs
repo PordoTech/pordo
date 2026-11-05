@@ -11,6 +11,43 @@ fn fixture(name: &str) -> String {
     .to_string_lossy()
     .into_owned()
 }
+#[test]
+#[ignore = "requires staged remdia components, audio device and native fixtures"]
+fn native_media_separate_audio_video_share_seeks_pause_and_eof() {
+    // The primary fixture also has audio: only its video may be emitted when
+    // the external audio input is supplied, so no duplicate audio is queued.
+    let mut p = Player::open_split(fixture("av.mp4"), Some(fixture("audio.wav")), None).unwrap();
+    p.set_volume(0.0);
+    until(&mut p, Duration::from_secs(10), |p, _| p.position() > 0.15);
+    assert!(p.snapshot().has_audio);
+    assert_eq!(p.snapshot().media.unwrap().kind, crate::media::Kind::Video);
+    p.set_playing(false);
+    until(&mut p, Duration::from_secs(3), |p, _| {
+        p.snapshot().state == PlaybackState::Paused
+    });
+    let paused = p.position();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!((p.position() - paused).abs() < 0.03);
+    p.seek(1.5);
+    let id = p.seek(0.5);
+    until(&mut p, Duration::from_secs(10), |p, events| {
+        events
+            .iter()
+            .any(|e| matches!(e,Event::SeekCompleted {id:done,..} if *done==id))
+            && p.snapshot().state == PlaybackState::Paused
+    });
+    assert!((p.position() - 0.5).abs() < 0.04);
+    p.set_playing(true);
+    until(&mut p, Duration::from_secs(5), |p, _| p.position() > 0.6);
+    p.seek((p.duration() - 0.2).max(0.0));
+    until(&mut p, Duration::from_secs(10), |p, _| {
+        p.snapshot().state == PlaybackState::Ended
+    });
+    p.toggle_play();
+    until(&mut p, Duration::from_secs(5), |p, _| {
+        p.position() > 0.1 && p.position() < 1.0 && p.snapshot().state != PlaybackState::Ended
+    });
+}
 fn pump(player: &mut Player) -> Vec<Event> {
     let mut events = Vec::new();
     while let Some(e) = player.poll_event() {

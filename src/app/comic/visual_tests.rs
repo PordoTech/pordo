@@ -679,7 +679,7 @@ fn comic_reading_mode_legacy_aliases_and_viewport_clamps_work() {
     assert!((webtoon.x - reader::INIT_WEBTOON_MIN_WIDTH).abs() < 0.5);
 }
 
-struct Capture {
+pub(in crate::app) struct Capture {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: egui_wgpu::Renderer,
@@ -1562,7 +1562,7 @@ fn provider_models_panel_opens_without_repeating_connection_forms() {
 }
 
 impl Capture {
-    fn new() -> Self {
+    pub(in crate::app) fn new() -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1581,7 +1581,7 @@ impl Capture {
             renderer,
         }
     }
-    fn save(
+    pub(in crate::app) fn save(
         &mut self,
         ctx: &egui::Context,
         size: [u32; 2],
@@ -1606,7 +1606,7 @@ impl Capture {
                         egui::Pos2::ZERO,
                         vec2(size[0] as f32, size[1] as f32),
                     )),
-                    time: Some(frame as f64),
+                    time: Some(ctx.input(|i| i.time) + 1.0),
                     events: pointer.map_or_else(
                         || vec![egui::Event::PointerGone],
                         |pos| vec![egui::Event::PointerMoved(pos)],

@@ -21,6 +21,7 @@ quick-xml = "0.42"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 crossbeam-channel = "0.5.17"
 futures-util = "0.3"
+md5 = "0.8"
 regex = "1"
 # Same pinned SDK revision as the application; bundled registers the built-in
 # factories on every platform, including the Android framework pack.

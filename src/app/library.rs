@@ -231,6 +231,9 @@ impl Drop for Library {
 
 impl App {
     pub(super) fn active_record_path(&self) -> Option<String> {
+        if let Some(path) = self.online_video.record_path() {
+            return Some(path);
+        }
         if let Some(song) = &self.online_origin {
             return Some(
                 self.library

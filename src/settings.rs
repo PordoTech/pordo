@@ -190,6 +190,7 @@ pub struct Settings {
     pub subtitle_concurrency: usize,
     pub llm: LlmSettings,
     pub music: crate::music_sources::Settings,
+    pub video: pordo_core::video_sources::Settings,
     pub comics: crate::comics::Settings,
 }
 impl Default for Settings {
@@ -203,6 +204,7 @@ impl Default for Settings {
             subtitle_concurrency: 2,
             llm: LlmSettings::default(),
             music: Default::default(),
+            video: Default::default(),
             comics: Default::default(),
         }
     }
@@ -230,6 +232,9 @@ impl Settings {
             crate::comics::digest(path.to_string_lossy().as_bytes()),
             id
         )
+    }
+    pub(crate) fn bilibili_target() -> String {
+        Self::secret_target(&Self::path(), "video/bilibili/session")
     }
     pub fn load_credentials(&mut self, vault: &impl crate::credentials::Vault) -> Result<()> {
         let path = Self::path();

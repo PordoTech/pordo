@@ -23,6 +23,7 @@ pub(super) struct State {
     pub page: Page,
     query: String,
     music_tab: usize,
+    pub(super) video_tab: usize,
     pub listening_tab: usize,
     filter: usize,
     pub resume: Option<(String, f64)>,
@@ -30,6 +31,9 @@ pub(super) struct State {
 
 impl App {
     pub(super) fn navigate(&mut self, page: Page) {
+        if page != self.workspace.page {
+            self.online_video.cancel_discovery();
+        }
         if page == Page::Home && self.workspace.page != Page::Home {
             self.comic.refresh_on_home(&self.settings, Instant::now());
         }

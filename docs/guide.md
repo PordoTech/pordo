@@ -69,6 +69,14 @@ Choose **Translate page** or **Translate chapter**. Original, translated and sid
 
 Translation is started explicitly. Cancelling stops local waiting, but an already accepted request may still be billed. Generated images can change artwork or mistranslate text; compare with the original.
 
+## Bilibili videos (desktop)
+
+Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Select a video, choose a part and an available quality, then press **Play**. Recent videos can be reopened from Home and the video library.
+
+In **Settings → Video sources**, select **Bilibili**, choose **Sign in with QR**, scan with the official Bilibili app and confirm on your phone. The account name appears after confirmation. Sessions are saved in Windows Credential Manager or macOS Keychain, outside ordinary settings and cloud sync. **Sign out / clear session** removes the locally saved session and stops Bilibili playback. Expired sessions require another scan; account-password login is not offered. Login controls are kept in settings; the video search bar uses the same layout as music search.
+
+The first version supports ordinary uploaded videos with H.264 video and AAC audio. Available qualities depend on your account and the streams Bilibili returns. Bangumi, live streams, paid courses, HDR and AV1/HEVC-only streams are not supported. If Bilibili requests security verification, follow the website prompt or sign in and retry; the app does not treat that response as an empty search. Initial seeks in long fragmented videos can take longer while the media index is read.
+
 ## AI subtitles
 
 In **Settings → AI Providers**, enter a compatible service address, key and available models. Fetch the model list or add an ID manually. Select an audio-capable model under **AI Subtitles**; comic translation selects its model separately.

@@ -26,6 +26,10 @@ Windows uses software Media Foundation transforms. macOS uses synchronous VideoT
 
 ## Network media
 
+Bilibili Web API, WBI signatures, QR login and UGC stream selection live in `pordo-core::video_sources::bilibili`. Desktop UI jobs are cancellable. Login sessions go directly to the OS vault and never enter settings JSON or cloud snapshots. Session cookies stay on Bilibili API requests; a separate cookie-free client fetches CDN media with the required Referer.
+
+A session-scoped loopback bridge streams Range responses without buffering a whole video. It uses service-provided HTTPS CDN backups and renews expired addresses without persisting them. Separate video/audio remdia sessions share a playback clock, cancellation and seek epoch. The demux worker retains at most one lookahead frame per input and merges by timestamp. API duration supplies the timeline when fragmented MP4 metadata has no duration. History stores only the public video URL and part number.
+
 Online music uses a shared disk cache and a token-protected loopback HTTP bridge. Range-capable sources support prioritized reads for seeking; other sources may need sequential download. Complete files are published without overwriting an existing destination, so the download directory must support hard links. Provider API credentials are kept away from media/CDN requests.
 
 Torrent reads are gated by verified pieces, not sparse-file length. Playback requests prioritize pieces; subtitle extraction uses a separate cache-only endpoint. Task URLs use random tokens on ephemeral loopback ports, and no public torrent-management API is exposed.

@@ -26,6 +26,7 @@ mod magnets;
 mod metadata;
 mod music;
 mod online_music;
+mod online_video;
 mod preferences;
 mod providers;
 mod qq;
@@ -50,6 +51,7 @@ enum PrefTab {
     Providers,
     Subtitles,
     MusicSources,
+    VideoSources,
     Comics,
     Cloud,
     About,
@@ -81,6 +83,7 @@ pub struct App {
     comic: comic::State,
     cloud: cloud::State,
     online_music: online_music::State,
+    online_video: online_video::State,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
     queue_kind_music: bool,
@@ -189,6 +192,7 @@ impl App {
             comic,
             cloud: Default::default(),
             online_music: online_music::State::new(&settings.music),
+            online_video: Default::default(),
             queue: Default::default(),
             queue_inactive: Default::default(),
             queue_kind_music: true,
@@ -412,6 +416,15 @@ impl App {
         self.load_media_with_key(path, progressive, None);
     }
     fn load_media_with_key(&mut self, path: String, progressive: bool, key: Option<String>) {
+        self.load_media_inputs(path, progressive, key, None);
+    }
+    fn load_media_inputs(
+        &mut self,
+        path: String,
+        progressive: bool,
+        key: Option<String>,
+        audio: Option<(Option<String>, f64)>,
+    ) {
         self.workspace.page = if self.queue_kind_music {
             workspace::Page::Listening
         } else {
@@ -439,6 +452,7 @@ impl App {
             crate::lyrics::Lyrics::load_for(std::path::Path::new(&path)).unwrap_or_default();
         self.lyrics_follow = true;
         self.player = None;
+        self.online_video.stop();
         self.loading = true;
         self.video.clear();
         self.scrub = 0.0;
@@ -449,7 +463,9 @@ impl App {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or(path.clone());
-        match if let Some(key) = key {
+        match if let Some((audio, duration)) = audio {
+            Player::open_split(path, audio, Some(duration))
+        } else if let Some(key) = key {
             Player::open_with_qq_key(path, key)
         } else if progressive {
             Player::open_progressive(path)
@@ -496,6 +512,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.comic.poll(ctx, &self.settings);
         self.poll_online_music(ctx);
+        self.poll_online_video(ctx);
         self.poll_lyrics(ctx);
         let mut advance = false;
         let mut online_failure = None;

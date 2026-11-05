@@ -75,6 +75,12 @@ impl App {
             ),
             (PrefTab::Comics, "漫画相关", "Comics", icons::BOOK_OPEN),
             (
+                PrefTab::VideoSources,
+                "视频源",
+                "Video sources",
+                icons::FILM_SLATE,
+            ),
+            (
                 PrefTab::Cloud,
                 "云同步",
                 "Cloud sync",
@@ -120,6 +126,7 @@ impl App {
                             PrefTab::Providers => self.preferences_providers(ui),
                             PrefTab::Subtitles => self.preferences_subtitles(ui),
                             PrefTab::MusicSources => self.preferences_music_sources(ui),
+                            PrefTab::VideoSources => self.preferences_video_sources(ui),
                             PrefTab::Comics => self.preferences_comics(ui),
                             PrefTab::Cloud => self.preferences_cloud(ui),
                             PrefTab::About => self.about(ui, &ui.ctx().clone()),
@@ -240,6 +247,7 @@ impl App {
                     ..Default::default()
                 };
             }
+            PrefTab::VideoSources => self.preferences_draft.video = Default::default(),
             PrefTab::Providers | PrefTab::Cloud | PrefTab::About => return,
         }
         self.config_message = language.text("已恢复默认值", "Defaults restored").into();

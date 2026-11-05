@@ -2970,6 +2970,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3941,6 +3947,88 @@ dependencies = [
 ]
 
 [[package]]
+name = "pordo"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.22.1",
+ "bytemuck",
+ "cpal",
+ "crossbeam-channel",
+ "dotenvy",
+ "eframe",
+ "egui-phosphor",
+ "egui-wgpu",
+ "futures-util",
+ "librqbit",
+ "pordo-core",
+ "qrcodegen",
+ "regex",
+ "remdia",
+ "reqwest",
+ "rfd",
+ "rtrb",
+ "rusqlite",
+ "rustls",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "tc_tea",
+ "tokio",
+ "tokio-util",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width",
+ "uuid",
+ "wgpu",
+ "windows-sys 0.61.2",
+ "winresource",
+]
+
+[[package]]
+name = "pordo-android"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "jni 0.21.1",
+ "jni 0.22.4",
+ "log",
+ "pordo-core",
+ "remdia",
+ "remdia-android-platform",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pordo-core"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.22.1",
+ "crossbeam-channel",
+ "dotenvy",
+ "futures-util",
+ "md5",
+ "quick-xml 0.42.0",
+ "regex",
+ "remdia",
+ "reqwest",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4030,6 +4118,12 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
 
 [[package]]
 name = "quanta"
@@ -4567,86 +4661,6 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
-
-[[package]]
-name = "pordo"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "aws-lc-rs",
- "axum",
- "base64 0.22.1",
- "bytemuck",
- "cpal",
- "crossbeam-channel",
- "dotenvy",
- "eframe",
- "egui-phosphor",
- "egui-wgpu",
- "futures-util",
- "librqbit",
- "regex",
- "remdia",
- "pordo-core",
- "reqwest",
- "rfd",
- "rtrb",
- "rusqlite",
- "rustls",
- "security-framework",
- "semver",
- "serde",
- "serde_json",
- "tc_tea",
- "tokio",
- "tokio-util",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width",
- "uuid",
- "wgpu",
- "windows-sys 0.61.2",
- "winresource",
-]
-
-[[package]]
-name = "pordo-android"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "jni 0.21.1",
- "jni 0.22.4",
- "log",
- "remdia",
- "remdia-android-platform",
- "pordo-core",
- "rustls-platform-verifier",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "pordo-core"
-version = "0.5.1"
-dependencies = [
- "anyhow",
- "aws-lc-rs",
- "axum",
- "base64 0.22.1",
- "crossbeam-channel",
- "dotenvy",
- "futures-util",
- "quick-xml 0.42.0",
- "regex",
- "remdia",
- "reqwest",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
 
 [[package]]
 name = "reqwest"

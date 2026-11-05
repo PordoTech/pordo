@@ -21,6 +21,7 @@ impl App {
         self.subtitle_skipped.clear();
         self.subtitle_metrics.clear();
         self.player = None;
+        self.online_video.stop();
         self.video.clear();
         self.source = None;
         self.title.clear();

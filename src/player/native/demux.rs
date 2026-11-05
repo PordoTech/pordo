@@ -100,6 +100,18 @@ fn run(
     request.hardware = pordo_core::environment::var_os("PORDO_SOFTWARE").is_none();
     let mut session = unsafe { engine.open(request.clone(), s.cancel.clone()) }
         .with_context(|| format!("open media '{path}' through remdia"))?;
+    let mut external_audio = if let Some(source) = &s.audio_source {
+        let mut audio = request.clone();
+        audio.source = source.clone();
+        Some(
+            unsafe { engine.open(audio, s.cancel.clone()) }
+                .context("open separate audio stream")?,
+        )
+    } else {
+        None
+    };
+    let mut pending = [None, None];
+    let mut finished = [false; 2];
     #[cfg(test)]
     let trace = crate::media_source::is_qq(std::path::Path::new(path));
     #[cfg(test)]
@@ -110,8 +122,20 @@ fn run(
         );
     }
     let header = Header {
-        duration: session.info().duration_us.unwrap_or(0) as f64 / 1e6,
-        has_audio: session.info().tracks.iter().any(|t| t.kind == "audio"),
+        duration: session
+            .info()
+            .duration_us
+            .filter(|d| *d > 0)
+            .map(|d| d as f64 / 1e6)
+            .or(s.duration_hint.filter(|d| d.is_finite() && *d > 0.0))
+            .unwrap_or(0.0),
+        has_audio: external_audio
+            .as_ref()
+            .unwrap_or(&session)
+            .info()
+            .tracks
+            .iter()
+            .any(|t| t.kind == "audio"),
         has_video: session
             .info()
             .tracks
@@ -149,10 +173,27 @@ fn run(
                     continue;
                 }
                 session = opened?;
+                if let Some(source) = &s.audio_source {
+                    let mut audio = updated.clone();
+                    audio.source = source.clone();
+                    let opened = unsafe { engine.open(audio, s.cancel.clone()) };
+                    if s.requested.load(Ordering::Acquire) > next.epoch {
+                        continue;
+                    }
+                    external_audio = Some(opened?);
+                }
                 request = updated;
             }
             waiting.store(true, Ordering::Release);
-            let result = session.seek((next.target * 1e6).round() as i64);
+            pending = [None, None];
+            finished = [false; 2];
+            let target_us = (next.target * 1e6).round() as i64;
+            let result = session.seek(target_us).and_then(|_| {
+                if let Some(audio) = &mut external_audio {
+                    audio.seek(target_us)?;
+                }
+                Ok(())
+            });
             waiting.store(false, Ordering::Release);
             if s.requested.load(Ordering::Acquire) > next.epoch {
                 continue;
@@ -178,7 +219,12 @@ fn run(
             continue;
         }
         waiting.store(true, Ordering::Release);
-        let result = session.read();
+        let result = read_inputs(
+            &mut session,
+            external_audio.as_mut(),
+            &mut pending,
+            &mut finished,
+        );
         waiting.store(false, Ordering::Release);
         if s.stop.load(Ordering::Acquire) {
             break;
@@ -209,4 +255,41 @@ fn run(
         }
     }
     Ok(())
+}
+
+// At most one lookahead frame per input. Both streams share the session clock,
+// seek epoch and cancellation; neither can run ahead into an unbounded queue.
+fn read_inputs(
+    video: &mut remdia::Session,
+    audio: Option<&mut remdia::Session>,
+    pending: &mut [Option<remdia::Frame>; 2],
+    ended: &mut [bool; 2],
+) -> Result<Option<remdia::Frame>> {
+    let Some(audio) = audio else {
+        return video.read();
+    };
+    for (i, source) in [video, audio].into_iter().enumerate() {
+        while pending[i].is_none() && !ended[i] {
+            match source.read()? {
+                Some(frame)
+                    if matches!(
+                        (i, frame.info()),
+                        (0, remdia::FrameInfo::Video { .. }) | (1, remdia::FrameInfo::Audio { .. })
+                    ) =>
+                {
+                    pending[i] = Some(frame)
+                }
+                Some(_) => {}
+                None => ended[i] = true,
+            }
+        }
+    }
+    let timestamp = |frame: &remdia::Frame| frame.info().pts_us().unwrap_or(0);
+    let index = match (&pending[0], &pending[1]) {
+        (Some(v), Some(a)) => usize::from(timestamp(a) < timestamp(v)),
+        (Some(_), None) => 0,
+        (None, Some(_)) => 1,
+        (None, None) => return Ok(None),
+    };
+    Ok(pending[index].take())
 }

@@ -1,5 +1,8 @@
 # Bundled components
 
+Bilibili WBI request signing uses `md5` 0.8.1 (MIT OR Apache-2.0); this protocol digest is not used for credential protection. QR symbols are generated locally with `qrcodegen` 1.8.0 (MIT). Their notices are bundled in `licenses/md5-LICENSE.md` and `licenses/qrcodegen-MIT.txt`.
+Sources: https://github.com/stainless-steel/md5 and https://www.nayuki.io/page/qr-code-generator-library .
+
 Cloud sync XML parsing uses `quick-xml` 0.42.0 (MIT), bundled in
 `licenses/quick-xml-MIT.txt`. Source: https://github.com/tafia/quick-xml .
 Credential encryption, password-based key derivation and SHA-256 hashing use

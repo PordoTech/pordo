@@ -13,3 +13,4 @@ pub mod music_sources;
 pub mod paths;
 pub mod pixels;
 pub mod sync;
+pub mod video_sources;

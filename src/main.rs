@@ -2,6 +2,7 @@
 
 mod ai;
 mod app;
+mod bilibili;
 mod comics;
 mod credentials;
 mod crypto;
@@ -69,6 +70,13 @@ fn main() -> eframe::Result<()> {
         let path = args.get(1).cloned().unwrap_or_default();
         if let Err(e) = selftest::run(path) {
             eprintln!("selftest error: {e:?}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("--selftest-bilibili") {
+        if let Err(e) = selftest::bilibili(args.get(1).cloned().unwrap_or_default()) {
+            eprintln!("Bilibili selftest failed: {e}");
             std::process::exit(1);
         }
         return Ok(());
