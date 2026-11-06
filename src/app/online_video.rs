@@ -8,6 +8,22 @@ use crate::{
     credentials::{SystemVault, Vault},
 };
 mod cards;
+mod controls;
+
+#[derive(Clone)]
+struct Active {
+    media_path: PathBuf,
+    detail: Detail,
+    part: usize,
+    playback: Playback,
+}
+struct Prepared {
+    source: bilibili::Source,
+    path: String,
+    active: Active,
+    resume: Option<f64>,
+    keep_position: bool,
+}
 
 struct Playing {
     path: String,
@@ -30,6 +46,7 @@ pub(super) struct State {
     searched_kind: SearchKind,
     uploaders: Vec<Uploader>,
     creator: Option<Uploader>,
+    pending_creator: Option<Uploader>,
     uploads: Vec<bilibili::Video>,
     uploads_job: Option<Job<SearchPage>>,
     uploads_page: usize,
@@ -43,24 +60,28 @@ pub(super) struct State {
     part: usize,
     resolve: Option<Job<Playback>>,
     ready: Option<Playback>,
-    prepare: Option<Job<(bilibili::Source, String)>>,
+    prepare: Option<Job<Prepared>>,
     playing: Option<Playing>,
+    active: Option<Active>,
     status: String,
     auth_status: String,
     auto_play: bool,
     requested_page: usize,
     resume: Option<f64>,
+    keep_position: bool,
     previews: cards::Previews,
 }
 impl State {
     pub(super) fn stop(&mut self) {
-        self.prepare = None;
+        self.cancel_discovery();
         self.playing = None;
+        self.active = None;
     }
     pub(super) fn record_path(&self) -> Option<String> {
         self.playing.as_ref().map(|p| p.path.clone())
     }
     pub(super) fn cancel_discovery(&mut self) {
+        self.pending_creator = None;
         self.previews.cancel_pending();
         self.search = None;
         self.uploads_job = None;
@@ -68,6 +89,17 @@ impl State {
         self.resolve = None;
         self.prepare = None;
         self.auto_play = false;
+        self.keep_position = false;
+    }
+    fn begin_video(&mut self, job: Job<Detail>, page: usize, resume: Option<f64>) {
+        self.cancel_discovery();
+        self.detail = None;
+        self.ready = None;
+        self.status.clear();
+        self.requested_page = page;
+        self.resume = resume;
+        self.auto_play = true;
+        self.detail_job = Some(job);
     }
     fn close_login(&mut self) {
         self.qr = None;
@@ -85,6 +117,61 @@ impl State {
     }
 }
 impl App {
+    fn favorite_creator_ids(&self) -> std::collections::HashSet<u64> {
+        self.library
+            .creators
+            .iter()
+            .filter(|r| r.favorite)
+            .map(|r| r.uploader.mid)
+            .collect()
+    }
+    fn toggle_creator_favorite(&mut self, creator: &Uploader) {
+        if let Err(error) = self.library.toggle_creator(creator) {
+            self.error = Some(error.to_string());
+        }
+    }
+    fn open_bilibili_creator(&mut self, creator: Uploader) {
+        self.show_online_video();
+        self.online_video.cancel_discovery();
+        self.online_video.auto_play = false;
+        self.online_video.detail = None;
+        self.online_video.ready = None;
+        self.online_video.uploads.clear();
+        self.online_video.creator = Some(creator.clone());
+        self.online_video.status.clear();
+        if self.online_video.api.is_some() {
+            self.creator_uploads(creator, 1);
+        } else {
+            self.online_video.pending_creator = Some(creator);
+        }
+    }
+    pub(super) fn video_creator_favorites(&mut self, ui: &mut Ui, query: &str) -> bool {
+        let creators = self.library.favorite_creators(query);
+        if creators.is_empty() {
+            return false;
+        }
+        let l = self.settings.language;
+        ui.label(
+            RichText::new(l.text("收藏UP主", "Favorite creators"))
+                .size(20.0)
+                .strong(),
+        );
+        ui.add_space(10.0);
+        let favorites = self.favorite_creator_ids();
+        match cards::creators(
+            ui,
+            &mut self.online_video.previews,
+            &creators,
+            l,
+            &favorites,
+        ) {
+            Some(cards::Action::Creator(creator)) => self.open_bilibili_creator(creator),
+            Some(cards::Action::FavoriteCreator(creator)) => self.toggle_creator_favorite(&creator),
+            _ => {}
+        }
+        ui.add_space(16.0);
+        true
+    }
     pub(super) fn show_online_video(&mut self) {
         if self.workspace.page != workspace::Page::Video {
             self.navigate(workspace::Page::Video);
@@ -172,7 +259,8 @@ impl App {
             {
                 state.requested_page = page;
             }
-            state.detail_job = Some(Job::spawn(move |_| async move { api.detail(&id).await }));
+            let job = Job::spawn(move |_| async move { api.detail(&id).await });
+            state.begin_video(job, state.requested_page, state.resume);
             return;
         }
         state.search = None;
@@ -236,8 +324,25 @@ impl App {
             detail.bvid, detail.parts[state.part].page
         );
         state.status.clear();
+        let detail = detail.clone();
+        let part = state.part;
+        let resume = state.resume;
+        let keep_position = state.keep_position;
         state.prepare = Some(Job::spawn(move |_| async move {
-            Ok((bilibili::start(api, playback).await?, path))
+            let source = bilibili::start(api, playback.clone()).await?;
+            let active = Active {
+                media_path: PathBuf::from(&source.video),
+                detail,
+                part,
+                playback,
+            };
+            Ok(Prepared {
+                source,
+                path,
+                active,
+                resume,
+                keep_position,
+            })
         }));
     }
     fn video_sign_out(&mut self) {
@@ -275,6 +380,7 @@ impl App {
         let mut resolve = false;
         let mut play = false;
         let mut pending_record = false;
+        let mut pending_creator = None;
         let state = &mut self.online_video;
         if !auth_visible {
             state.close_login();
@@ -286,6 +392,7 @@ impl App {
                     state.api = Some(api);
                     state.account = account;
                     pending_record = state.auto_play;
+                    pending_creator = state.pending_creator.take();
                 }
                 Err(e) => state.auth_status = e.to_string(),
             }
@@ -350,11 +457,13 @@ impl App {
                     state.poll_at = None;
                     state.auth_status = "二维码已过期 / QR code expired".into();
                 }
-                Ok(LoginPoll::Waiting) => {
-                    state.auth_status = "请用哔哩哔哩 App 扫码 / Scan with the Bilibili app".into()
-                }
+                Ok(LoginPoll::Waiting) => state.auth_status.clear(),
                 Ok(LoginPoll::Confirm) => {
-                    state.auth_status = "请在手机上确认登录 / Confirm sign-in on your phone".into()
+                    state.auth_status = self
+                        .settings
+                        .language
+                        .text("请在手机上确认登录", "Confirm sign-in on your phone")
+                        .into()
                 }
                 Err(e) => state.auth_status = e.to_string(),
             }
@@ -417,6 +526,9 @@ impl App {
                 Err(e) => {
                     state.status = e.to_string();
                     state.auto_play = false;
+                    if self.workspace.page == workspace::Page::Playing {
+                        self.error = Some(e.to_string());
+                    }
                 }
             }
         }
@@ -431,6 +543,9 @@ impl App {
                 Err(e) => {
                     state.status = e.to_string();
                     state.auto_play = false;
+                    if self.workspace.page == workspace::Page::Playing {
+                        self.error = Some(e.to_string());
+                    }
                 }
             }
         }
@@ -440,14 +555,45 @@ impl App {
         }
         if let Some(result) = prepared {
             match result {
-                Ok((source, path)) => {
-                    let state = &mut self.online_video;
-                    let title = state
-                        .detail
-                        .as_ref()
-                        .map(|d| format!("{} · {}", d.title, d.parts[state.part].part))
-                        .unwrap_or_default();
-                    let resume = state.resume.take();
+                Ok(prepared) => {
+                    let Prepared {
+                        source,
+                        path,
+                        active,
+                        resume,
+                        keep_position,
+                    } = prepared;
+                    let title = if active.detail.parts.len() > 1 {
+                        format!(
+                            "{} · {}",
+                            active.detail.title, active.detail.parts[active.part].part
+                        )
+                    } else {
+                        active.detail.title.clone()
+                    };
+                    let (resume, playing) = if keep_position {
+                        self.player
+                            .as_ref()
+                            .map(|p| {
+                                (
+                                    Some(
+                                        self.pending_seek
+                                            .map_or_else(|| p.position(), |(_, pos)| pos),
+                                    ),
+                                    p.is_playing(),
+                                )
+                            })
+                            .unwrap_or((resume, true))
+                    } else {
+                        (resume, true)
+                    };
+                    let subtitles = keep_position.then(|| {
+                        (
+                            std::mem::take(&mut self.subtitles),
+                            std::mem::take(&mut self.subtitle_skipped),
+                            std::mem::take(&mut self.subtitle_metrics),
+                        )
+                    });
                     self.set_active_queue(false);
                     self.queue = Default::default();
                     self.workspace.resume = None;
@@ -463,14 +609,29 @@ impl App {
                         path: path.clone(),
                         _source: source,
                     });
+                    self.online_video.active = Some(active);
+                    self.online_video.resume = None;
                     self.workspace.resume = resume.map(|position| (path, position));
                     self.online_video.cancel_discovery();
+                    if let Some(player) = &self.player {
+                        player.set_playing(playing);
+                    }
+                    if let Some((subtitles, skipped, metrics)) = subtitles {
+                        self.subtitles = subtitles;
+                        self.subtitle_skipped = skipped;
+                        self.subtitle_metrics = metrics;
+                    }
                 }
-                Err(e) => self.online_video.status = e.to_string(),
+                Err(e) => {
+                    self.online_video.status = e.to_string();
+                    if self.workspace.page == workspace::Page::Playing {
+                        self.error = Some(e.to_string());
+                    }
+                }
             }
         }
         if resolve {
-            self.video_resolve(80);
+            self.video_resolve(bilibili::DEFAULT_QUALITY);
         }
         if play {
             self.play_bilibili();
@@ -478,9 +639,13 @@ impl App {
         if pending_record {
             self.video_search(1);
         }
+        if let Some(creator) = pending_creator {
+            self.creator_uploads(creator, 1);
+        }
         if auth_visible
             || (self.workspace.page == workspace::Page::Video && self.workspace.video_tab == 1)
             || self.online_video.prepare.is_some()
+            || self.online_video.resolve.is_some()
             || self.online_video.save.is_some()
         {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -511,15 +676,14 @@ impl App {
                 ui.label(l.text("未登录", "Not signed in"));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                signout = ui
-                    .add_enabled(
-                        self.online_video.save.is_none(),
-                        egui::Button::new(
-                            l.text("退出登录 / 清除会话", "Sign out / clear session"),
-                        ),
-                    )
-                    .clicked();
-                if self.online_video.account.is_none() {
+                if self.online_video.account.is_some() {
+                    signout = ui
+                        .add_enabled(
+                            self.online_video.save.is_none(),
+                            egui::Button::new(l.text("退出登录", "Sign out")),
+                        )
+                        .clicked();
+                } else {
                     login = ui
                         .add_enabled(
                             self.online_video.api.is_some()
@@ -535,6 +699,7 @@ impl App {
             self.video_sign_out();
         }
         if login && let Some(api) = self.online_video.api.clone() {
+            self.online_video.auth_status.clear();
             self.online_video.qr = None;
             self.online_video.poll = None;
             self.online_video.poll_at = None;
@@ -560,10 +725,14 @@ impl App {
                         }
                     }
                 }
-                ui.label(l.text(
-                    "用官方哔哩哔哩 App 扫码，\n并在手机上确认。",
-                    "Scan with the official Bilibili app\nand confirm on your phone.",
-                ));
+                ui.label(if self.online_video.auth_status.is_empty() {
+                    l.text(
+                        "用官方哔哩哔哩 App 扫码，\n并在手机上确认。",
+                        "Scan with the official Bilibili app\nand confirm on your phone.",
+                    )
+                } else {
+                    &self.online_video.auth_status
+                });
             });
         }
         ui.separator();
@@ -574,13 +743,9 @@ impl App {
         {
             ui.spinner();
         }
-        if !self.online_video.auth_status.is_empty() {
+        if self.online_video.qr.is_none() && !self.online_video.auth_status.is_empty() {
             ui.label(&self.online_video.auth_status);
         }
-        ui.small(l.text(
-            "登录状态仅保存在此设备。",
-            "Your sign-in session stays on this device.",
-        ));
     }
 
     pub(super) fn online_video_contents(&mut self, ui: &mut Ui) {
@@ -680,143 +845,85 @@ impl App {
             ui.label(&self.online_video.status);
         }
         ui.add_space(16.0);
-        if let Some(detail) = self.online_video.detail.clone() {
-            if ui
-                .button(if self.online_video.creator.is_some() {
-                    l.text("返回UP主投稿", "Back to uploads")
-                } else {
-                    l.text("返回搜索结果", "Back to results")
-                })
-                .clicked()
-            {
-                self.online_video.detail = None;
-                self.online_video.resolve = None;
-                self.online_video.ready = None;
+        if let Some(creator) = self.online_video.creator.clone() {
+            if design::back_button(ui, l.text("返回搜索结果", "Back to results")).clicked() {
+                self.online_video.creator = None;
+                self.online_video.uploads_job = None;
+                self.online_video.status.clear();
                 return;
             }
-            ui.heading(&detail.title);
-            let previous = self.online_video.part;
-            egui::ComboBox::from_id_salt("bili-part")
-                .width(ui.available_width() - 20.0)
-                .selected_text(&detail.parts[previous].part)
-                .show_ui(ui, |ui| {
-                    for (index, part) in detail.parts.iter().enumerate() {
-                        ui.selectable_value(
-                            &mut self.online_video.part,
-                            index,
-                            format!(
-                                "P{} · {} · {}",
-                                part.page,
-                                part.part,
-                                fmt_time(part.duration as f64)
-                            ),
-                        );
-                    }
-                });
-            if previous != self.online_video.part {
-                self.online_video.resume = None;
-                self.video_resolve(80);
-            }
-            if let Some(ready) = self.online_video.ready.clone() {
-                let mut quality = ready.quality;
-                egui::ComboBox::from_id_salt("bili-quality")
-                    .selected_text(
-                        ready
-                            .qualities
-                            .iter()
-                            .find(|q| q.id == quality)
-                            .map(|q| q.label.clone())
-                            .unwrap_or_else(|| quality.to_string()),
-                    )
-                    .show_ui(ui, |ui| {
-                        for q in &ready.qualities {
-                            ui.selectable_value(&mut quality, q.id, &q.label);
-                        }
-                    });
-                if quality != ready.quality {
-                    self.online_video.resume = None;
-                    self.video_resolve(quality);
-                } else if ui
-                    .add_enabled(
-                        self.online_video.prepare.is_none(),
-                        egui::Button::new(l.text("播放", "Play")),
-                    )
-                    .clicked()
-                {
-                    self.play_bilibili();
-                }
-            } else if self.online_video.resolve.is_none()
-                && ui
-                    .button(l.text("重试获取画质", "Retry loading qualities"))
-                    .clicked()
-            {
-                self.video_resolve(80);
-            }
-            ui.small(l.text(
-                "可用画质由账号权限与视频编码决定。",
-                "Available qualities depend on your account and supported codecs.",
-            ));
-        } else {
-            if let Some(creator) = self.online_video.creator.clone() {
-                if ui
-                    .button(l.text("返回搜索结果", "Back to results"))
-                    .clicked()
-                {
-                    self.online_video.creator = None;
-                    self.online_video.uploads_job = None;
-                    self.online_video.status.clear();
-                    return;
-                }
+            ui.horizontal(|ui| {
                 ui.heading(&creator.uname);
-            }
-            let show_more = if self.online_video.creator.is_some() {
-                self.online_video.uploads_more || !self.online_video.status.is_empty()
-            } else {
-                self.online_video.has_more
-            };
-            let action = design::scroll()
-                .max_height((ui.available_height() - if show_more { 48.0 } else { 0.0 }).max(120.0))
-                .show(ui, |ui| cards::results(ui, &mut self.online_video, l))
-                .inner;
-            match action {
-                Some(cards::Action::Creator(creator)) => self.creator_uploads(creator, 1),
-                Some(cards::Action::MoreCreators) => {
-                    self.online_video.kind = SearchKind::Uploader;
-                    self.video_search(1);
-                }
-                Some(cards::Action::Video(id)) => {
-                    if let Some(api) = self.online_video.api.clone() {
-                        self.online_video.requested_page = 1;
-                        self.online_video.detail_job =
-                            Some(Job::spawn(move |_| async move { api.detail(&id).await }));
-                    }
-                }
-                None => {}
-            }
-            if let Some(creator) = self.online_video.creator.clone() {
-                if self.online_video.uploads_job.is_none()
-                    && (self.online_video.uploads_more || !self.online_video.status.is_empty())
-                    && ui
-                        .button(if self.online_video.uploads_more {
-                            l.text("加载更多投稿", "More uploads")
-                        } else {
-                            l.text("重试获取投稿", "Retry loading uploads")
-                        })
-                        .clicked()
+                let favorite = self.library.creator_favorite(creator.mid);
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::splat(design::CONTROL_HEIGHT), Sense::hover());
+                if design::favorite_at(
+                    ui,
+                    ui.id().with(("creator-favorite", creator.mid)),
+                    rect,
+                    favorite,
+                )
+                .on_hover_text(if favorite {
+                    l.text("取消收藏UP主", "Remove creator from favorites")
+                } else {
+                    l.text("收藏UP主", "Favorite creator")
+                })
+                .clicked()
                 {
-                    let page = if self.online_video.uploads_more {
-                        self.online_video.uploads_page + 1
-                    } else {
-                        self.online_video.uploads_page.max(1)
-                    };
-                    self.creator_uploads(creator, page);
+                    self.toggle_creator_favorite(&creator);
                 }
-            } else if self.online_video.has_more
-                && self.online_video.search.is_none()
-                && ui.button(l.text("加载更多", "Load more")).clicked()
-            {
-                self.video_search(self.online_video.page + 1);
+            });
+        }
+        let show_more = if self.online_video.creator.is_some() {
+            self.online_video.uploads_more || !self.online_video.status.is_empty()
+        } else {
+            self.online_video.has_more
+        };
+        let favorites = self.favorite_creator_ids();
+        let action = design::scroll()
+            .max_height((ui.available_height() - if show_more { 48.0 } else { 0.0 }).max(120.0))
+            .show(ui, |ui| {
+                cards::results(ui, &mut self.online_video, l, &favorites)
+            })
+            .inner;
+        match action {
+            Some(cards::Action::Creator(creator)) => self.open_bilibili_creator(creator),
+            Some(cards::Action::FavoriteCreator(creator)) => self.toggle_creator_favorite(&creator),
+            Some(cards::Action::MoreCreators) => {
+                self.online_video.kind = SearchKind::Uploader;
+                self.video_search(1);
             }
+            Some(cards::Action::Video(id)) => {
+                if let Some(api) = self.online_video.api.clone() {
+                    let job = Job::spawn(move |_| async move { api.detail(&id).await });
+                    self.online_video.begin_video(job, 1, None);
+                }
+            }
+            None => {}
+        }
+        if let Some(creator) = self.online_video.creator.clone() {
+            if self.online_video.uploads_job.is_none()
+                && (self.online_video.uploads_more || !self.online_video.status.is_empty())
+                && ui
+                    .button(if self.online_video.uploads_more {
+                        l.text("加载更多投稿", "More uploads")
+                    } else {
+                        l.text("重试获取投稿", "Retry loading uploads")
+                    })
+                    .clicked()
+            {
+                let page = if self.online_video.uploads_more {
+                    self.online_video.uploads_page + 1
+                } else {
+                    self.online_video.uploads_page.max(1)
+                };
+                self.creator_uploads(creator, page);
+            }
+        } else if self.online_video.has_more
+            && self.online_video.search.is_none()
+            && ui.button(l.text("加载更多", "Load more")).clicked()
+        {
+            self.video_search(self.online_video.page + 1);
         }
     }
 }

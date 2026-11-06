@@ -299,8 +299,18 @@ impl App {
         });
         library::sort_favorites(&mut records);
         design::scroll().auto_shrink([false, false]).show(ui, |ui| {
+            let mut has_creators = false;
             if page == Page::Video {
+                has_creators = self.video_creator_favorites(ui, &query);
                 if !records.is_empty() {
+                    if has_creators {
+                        ui.label(
+                            RichText::new(l.text("收藏视频", "Favorite videos"))
+                                .size(20.0)
+                                .strong(),
+                        );
+                        ui.add_space(10.0);
+                    }
                     self.media_cards(ui, &records);
                 }
             } else {
@@ -373,13 +383,13 @@ impl App {
                     }
                 }
             }
-            if records.is_empty() {
+            if records.is_empty() && !has_creators {
                 let message = if !query.is_empty() {
                     l.text("没有找到匹配的收藏", "No matching favorites")
                 } else if page == Page::Music {
                     l.text("暂无收藏音乐", "No favorite music")
                 } else {
-                    l.text("暂无收藏视频", "No favorite videos")
+                    l.text("暂无收藏视频或UP主", "No favorite videos or creators")
                 };
                 design::empty_state(
                     ui,

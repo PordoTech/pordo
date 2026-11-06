@@ -104,9 +104,9 @@ struct Gesture {
     pointer: egui::Pos2,
 }
 
-// Keep pointer capture in egui: starting an OS modal drag can release capture
-// before some backends deliver the remaining pointer events.
-fn window_gesture(ui: &Ui, response: &Response, direction: Option<egui::ResizeDirection>) {
+// Caption movement keeps its existing egui gesture; edge resizing is delegated
+// to the OS and must never feed outer dimensions into client-size requests.
+fn caption_gesture(ui: &Ui, response: &Response) {
     let id = response.id.with("window-gesture");
     let ctx = ui.ctx();
     let (outer, maximized, pointer, down) = ctx.input(|i| {
@@ -118,7 +118,7 @@ fn window_gesture(ui: &Ui, response: &Response, direction: Option<egui::ResizeDi
         )
     });
     if maximized {
-        if direction.is_none() && response.dragged() {
+        if response.dragged() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         }
         return;
@@ -138,11 +138,8 @@ fn window_gesture(ui: &Ui, response: &Response, direction: Option<egui::ResizeDi
             && let (Some(outer), Some(pointer)) = (outer, pointer)
         {
             let delta = outer.min + pointer.to_vec2() - gesture.pointer;
-            let target = gesture_rect(gesture.outer, delta, direction);
+            let target = gesture.outer.translate(delta);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(target.min));
-            if direction.is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(target.size()));
-            }
         }
         ctx.data_mut(|d| {
             if response.drag_stopped() || !down {
@@ -154,24 +151,32 @@ fn window_gesture(ui: &Ui, response: &Response, direction: Option<egui::ResizeDi
     }
 }
 
-fn gesture_rect(mut rect: Rect, delta: Vec2, direction: Option<egui::ResizeDirection>) -> Rect {
-    use egui::ResizeDirection as D;
-    let Some(direction) = direction else {
-        return rect.translate(delta);
-    };
-    if matches!(direction, D::West | D::NorthWest | D::SouthWest) {
-        rect.min.x = (rect.min.x + delta.x).min(rect.max.x - 760.0);
+fn begin_resize(ui: &Ui, response: &Response, direction: egui::ResizeDirection) {
+    let ctx = ui.ctx();
+    // BeginResize must run immediately after a real press, once per input
+    // frame. Held buttons, redraws and egui's extra layout passes must not
+    // restart Windows' modal resize loop after capture changes or release.
+    if !ui.is_enabled()
+        || !response.is_pointer_button_down_on()
+        || !ctx.input(|i| i.focused && i.pointer.primary_pressed())
+        || fullscreen(ctx)
+        || ctx.input(|i| i.viewport().maximized.unwrap_or(false))
+    {
+        return;
     }
-    if matches!(direction, D::East | D::NorthEast | D::SouthEast) {
-        rect.max.x = (rect.max.x + delta.x).max(rect.min.x + 760.0);
+    let frame = ctx.cumulative_frame_nr();
+    let fresh = ctx.data_mut(|data| {
+        let id = Id::new("window-native-resize-frame");
+        if data.get_temp::<u64>(id) == Some(frame) {
+            false
+        } else {
+            data.insert_temp(id, frame);
+            true
+        }
+    });
+    if fresh {
+        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
     }
-    if matches!(direction, D::North | D::NorthWest | D::NorthEast) {
-        rect.min.y = (rect.min.y + delta.y).min(rect.max.y - 540.0);
-    }
-    if matches!(direction, D::South | D::SouthWest | D::SouthEast) {
-        rect.max.y = (rect.max.y + delta.y).max(rect.min.y + 540.0);
-    }
-    rect
 }
 
 /// Register the caption background before interactive content. Search fields,
@@ -194,7 +199,7 @@ pub(super) fn drag_region(ui: &mut Ui) {
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
     } else {
-        window_gesture(ui, &response, None);
+        caption_gesture(ui, &response);
     }
 }
 
@@ -416,7 +421,7 @@ fn resize_edges_on(ui: &mut Ui, screen: Rect) {
                 Sense::drag(),
             )
             .on_hover_cursor(cursor);
-        window_gesture(ui, &response, Some(direction));
+        begin_resize(ui, &response, direction);
     }
 }
 
@@ -612,26 +617,121 @@ mod tests {
     }
 
     #[test]
-    fn resize_preserves_opposite_edges_and_minimum_size() {
-        let rect = Rect::from_min_size(pos2(200.0, 100.0), vec2(1280.0, 800.0));
-        assert_eq!(
-            gesture_rect(rect, vec2(-50.0, 30.0), None),
-            rect.translate(vec2(-50.0, 30.0))
-        );
-        let resized = gesture_rect(
-            rect,
-            vec2(1000.0, 1000.0),
-            Some(egui::ResizeDirection::NorthWest),
-        );
-        assert_eq!(resized.max, rect.max);
-        assert_eq!(resized.size(), vec2(760.0, 540.0));
-        let resized = gesture_rect(
-            rect,
-            vec2(100.0, 80.0),
-            Some(egui::ResizeDirection::SouthEast),
-        );
-        assert_eq!(resized.min, rect.min);
-        assert_eq!(resized.size(), vec2(1380.0, 880.0));
+    fn native_resize_runs_once_without_size_feedback_after_redraw_release_or_focus_loss() {
+        use egui::{ResizeDirection as D, ViewportCommand as V};
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for (point, direction) in [
+                (pos2(2.0, 2.0), D::NorthWest),
+                (pos2(1278.0, 2.0), D::NorthEast),
+                (pos2(2.0, 798.0), D::SouthWest),
+                (pos2(1278.0, 798.0), D::SouthEast),
+                (pos2(600.0, 2.0), D::North),
+                (pos2(600.0, 798.0), D::South),
+                (pos2(2.0, 400.0), D::West),
+                (pos2(1278.0, 400.0), D::East),
+            ] {
+                let ctx = egui::Context::default();
+                let button = |pressed| egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                let render = |events, growth: f32, focused, discard| {
+                    let mut raw = input(false, false, events);
+                    raw.focused = focused;
+                    let viewport = raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+                    viewport.native_pixels_per_point = Some(scale);
+                    viewport.inner_rect = Some(Rect::from_min_size(
+                        pos2(208.0, 108.0),
+                        vec2(1280.0 + growth, 800.0 + growth),
+                    ));
+                    viewport.outer_rect = Some(Rect::from_min_size(
+                        pos2(200.0, 100.0),
+                        vec2(1296.0 + growth, 816.0 + growth),
+                    ));
+                    let mut output = ctx.run_ui(raw, |ui| {
+                        resize_edges(ui);
+                        if discard && ctx.current_pass_index() == 0 {
+                            ctx.request_discard("resize layout pass regression");
+                        }
+                    });
+                    output.textures_delta.clear();
+                    output.viewport_output[&egui::ViewportId::ROOT]
+                        .commands
+                        .iter()
+                        .filter(|command| {
+                            matches!(
+                                command,
+                                V::BeginResize(_) | V::InnerSize(_) | V::OuterPosition(_)
+                            )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                assert!(
+                    render(vec![egui::Event::PointerMoved(point)], 0.0, true, false).is_empty()
+                );
+                let commands = render(vec![button(true)], 0.0, true, true);
+                assert_eq!(
+                    commands,
+                    vec![V::BeginResize(direction)],
+                    "{direction:?} at {scale}x"
+                );
+                for growth in [40.0, 80.0, 80.0, 80.0] {
+                    assert!(render(vec![], growth, true, false).is_empty());
+                }
+                assert!(render(vec![], 80.0, false, false).is_empty());
+                assert!(render(vec![button(false)], 80.0, true, false).is_empty());
+                assert!(render(vec![], 80.0, true, false).is_empty());
+                assert_eq!(
+                    render(
+                        vec![egui::Event::PointerMoved(point), button(true)],
+                        0.0,
+                        true,
+                        false
+                    ),
+                    vec![V::BeginResize(direction)]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_resize_is_disabled_in_fullscreen_maximized_and_unfocused_windows() {
+        for (full, maximized, focused) in [
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            let ctx = egui::Context::default();
+            let point = pos2(1278.0, 600.0);
+            for pressed in [false, true] {
+                let mut raw = input(full, maximized, vec![egui::Event::PointerMoved(point)]);
+                raw.focused = focused;
+                if pressed {
+                    raw.events.push(egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(raw, resize_edges);
+                output.textures_delta.clear();
+                assert!(
+                    !output.viewport_output[&egui::ViewportId::ROOT]
+                        .commands
+                        .iter()
+                        .any(|command| matches!(
+                            command,
+                            egui::ViewportCommand::BeginResize(_)
+                                | egui::ViewportCommand::InnerSize(_)
+                                | egui::ViewportCommand::OuterPosition(_)
+                        ))
+                );
+            }
+        }
     }
 
     fn drag_from_to(from: egui::Pos2, to: egui::Pos2) -> Vec<egui::ViewportCommand> {
@@ -655,6 +755,7 @@ mod tests {
                 .outer_rect = Some(Rect::from_min_size(pos2(200.0, 100.0), vec2(1280.0, 800.0)));
             input
         };
+        let mut commands = Vec::new();
         for events in [
             vec![],
             vec![
@@ -668,14 +769,22 @@ mod tests {
             ],
         ] {
             let mut output = ctx.run_ui(input(events), draw);
+            commands.extend(
+                output
+                    .viewport_output
+                    .values()
+                    .flat_map(|v| v.commands.iter().cloned()),
+            );
             output.textures_delta.clear();
         }
         let mut output = ctx.run_ui(input(vec![egui::Event::PointerMoved(to)]), draw);
-        let commands = output
-            .viewport_output
-            .values()
-            .flat_map(|v| v.commands.iter().cloned())
-            .collect();
+        commands.extend(
+            output
+                .viewport_output
+                .values()
+                .flat_map(|v| v.commands.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
         output.textures_delta.clear();
         commands
     }
@@ -687,15 +796,18 @@ mod tests {
                 .contains(&egui::ViewportCommand::OuterPosition(pos2(100.0, 170.0)))
         );
         assert!(
-            drag_from_to(pos2(1278.0, 600.0), pos2(1178.0, 600.0))
-                .contains(&egui::ViewportCommand::InnerSize(vec2(1180.0, 800.0)))
+            drag_from_to(pos2(1278.0, 600.0), pos2(1178.0, 600.0)).contains(
+                &egui::ViewportCommand::BeginResize(egui::ResizeDirection::East)
+            )
         );
         assert!(
             !drag_from_to(pos2(600.0, 400.0), pos2(650.0, 400.0))
                 .iter()
                 .any(|c| matches!(
                     c,
-                    egui::ViewportCommand::OuterPosition(_) | egui::ViewportCommand::InnerSize(_)
+                    egui::ViewportCommand::OuterPosition(_)
+                        | egui::ViewportCommand::InnerSize(_)
+                        | egui::ViewportCommand::BeginResize(_)
                 ))
         );
     }

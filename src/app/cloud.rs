@@ -180,6 +180,15 @@ impl App {
             self.comic.entries(),
             self.cloud.journal.as_ref(),
         );
+        for record in &self.library.creators {
+            let prefix = format!("creator/bilibili/{}", record.uploader.mid);
+            if !record.favorite && !tracked(&format!("{prefix}/favorite")) {
+                continue;
+            }
+            data.insert(format!("{prefix}/profile"), json!(record.uploader));
+            data.insert(format!("{prefix}/favorite"), json!(record.favorite));
+            data.insert(format!("{prefix}/favorited_at"), json!(record.favorited_at));
+        }
         for record in &self.library.records {
             let Some(song) = &record.online else { continue };
             let prefix = format!("song/{}", song.key());
@@ -472,6 +481,44 @@ impl App {
 
     fn apply_cloud_library(&mut self, values: &Snapshot) -> anyhow::Result<()> {
         let previous_records = self.library.records.clone();
+        let previous_creators = self.library.creators.clone();
+        let creators = values
+            .iter()
+            .filter(|(key, _)| key.starts_with("creator/bilibili/") && key.ends_with("/profile"))
+            .map(|(key, value)| -> anyhow::Result<library::CreatorRecord> {
+                let uploader: crate::bilibili::Uploader = serde_json::from_value(value.clone())?;
+                let prefix = key.trim_end_matches("/profile");
+                anyhow::ensure!(
+                    uploader.mid > 0
+                        && !uploader.uname.trim().is_empty()
+                        && prefix == format!("creator/bilibili/{}", uploader.mid),
+                    "Invalid synced creator identity"
+                );
+                Ok(library::CreatorRecord {
+                    uploader,
+                    favorite: values
+                        .get(&format!("{prefix}/favorite"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    favorited_at: values
+                        .get(&format!("{prefix}/favorited_at"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for creator in creators {
+            if let Some(old) = self
+                .library
+                .creators
+                .iter_mut()
+                .find(|r| r.uploader.mid == creator.uploader.mid)
+            {
+                *old = creator;
+            } else {
+                self.library.creators.push(creator);
+            }
+        }
         for entry in sync::portable::apply_comics(values, self.comic.entries())? {
             let unchanged = self
                 .comic
@@ -529,7 +576,7 @@ impl App {
                 record.played = p["played"].as_u64().unwrap_or(0);
             }
         }
-        if self.library.records != previous_records {
+        if self.library.records != previous_records || self.library.creators != previous_creators {
             self.library.save_records()?;
         }
         Ok(())
@@ -784,6 +831,46 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-data")
             .join(uuid::Uuid::new_v4().to_string())
+    }
+    #[test]
+    fn creator_favorites_sync_profiles_cancellations_and_identity_without_sessions() {
+        let ctx = egui::Context::default();
+        let da = directory();
+        let db = directory();
+        let mut first = app(&ctx, &da);
+        let mut second = app(&ctx, &db);
+        let creator = serde_json::from_value(
+            serde_json::json!({"mid":123,"uname":"Favorite UP","upic":null}),
+        )
+        .unwrap();
+        first.library.toggle_creator(&creator).unwrap();
+        let mut snapshot = first.cloud_snapshot();
+        let prefix = "creator/bilibili/123";
+        assert_eq!(snapshot[&format!("{prefix}/favorite")], json!(true));
+        second.apply_cloud_library(&snapshot).unwrap();
+        assert!(second.library.creator_favorite(123));
+        assert!(
+            second.library.records.is_empty(),
+            "creators are not playable media records"
+        );
+        assert_eq!(
+            second.library.creators[0].favorited_at,
+            first.library.creators[0].favorited_at
+        );
+        snapshot.insert(format!("{prefix}/favorite"), json!(false));
+        second.apply_cloud_library(&snapshot).unwrap();
+        assert!(!second.library.creator_favorite(123));
+        snapshot.get_mut(&format!("{prefix}/profile")).unwrap()["mid"] = json!(456);
+        assert!(second.apply_cloud_library(&snapshot).is_err());
+        assert!(!second.library.creator_favorite(456));
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("SESSDATA")
+        );
+        drop((first, second));
+        std::fs::remove_dir_all(da).unwrap();
+        std::fs::remove_dir_all(db).unwrap();
     }
     fn song() -> crate::music_sources::OnlineSong {
         crate::music_sources::OnlineSong {

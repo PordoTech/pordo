@@ -34,6 +34,90 @@ fn titles_are_plain_text_and_pagination_is_preserved() {
     assert_eq!(page.videos[0].uploader, "UP");
     assert!(page.has_more);
 }
+
+#[test]
+fn overlapping_search_fields_work_in_mixed_video_and_creator_results_and_uploads() {
+    let row = json!({"bvid":"BV1xx411c7mD","title":"<em>KAYGEZ</em> video",
+        "pic":"//i0.hdslb.com/bfs/archive/actual.jpg","cover":"",
+        "author":"KAYGEZ","uploader":"fallback","length":120,"duration":"2:00",
+        "play":"1234","views":12,"pubdate":1730000000,"published":1700000000});
+    let creator = json!({"mid":"123","uname":"KAYGEZ","upic":"//i0.hdslb.com/bfs/face/avatar.jpg","avatar":""});
+    let mixed = parse_search(
+        &json!({"code":0,"data":{"result":[
+            {"result_type":"video","data":[row.clone()]},
+            {"result_type":"bili_user","data":[creator.clone()]}
+        ]}}),
+        SearchKind::All,
+    )
+    .unwrap();
+    let video = parse_search(
+        &json!({"code":0,"data":{"result":[row.clone()]}}),
+        SearchKind::Video,
+    )
+    .unwrap();
+    let uploads = parse_uploads(
+        &json!({"code":0,"data":{"list":{"vlist":[row]},"page":{"count":1,"ps":20}}}),
+        1,
+    )
+    .unwrap();
+    for result in [mixed.videos, video.videos, uploads.videos] {
+        assert_eq!(result.len(), 1);
+        let video = &result[0];
+        assert_eq!(video.title, "KAYGEZ video");
+        assert_eq!(
+            video.cover.as_deref(),
+            Some("//i0.hdslb.com/bfs/archive/actual.jpg")
+        );
+        assert_eq!(video.uploader, "KAYGEZ");
+        assert_eq!(video.duration, "120");
+        assert_eq!(video.views, Some(1234));
+        assert_eq!(video.published, Some(1730000000));
+    }
+    let creators = parse_search(
+        &json!({"code":0,"data":{"result":[creator]}}),
+        SearchKind::Uploader,
+    )
+    .unwrap();
+    for results in [mixed.uploaders, creators.uploaders] {
+        assert_eq!(
+            results[0].avatar.as_deref(),
+            Some("//i0.hdslb.com/bfs/face/avatar.jpg")
+        );
+    }
+}
+
+#[test]
+fn empty_native_search_fields_keep_fallbacks_and_zero_counts_remain_valid() {
+    for empty in [Value::Null, json!(""), json!("  ")] {
+        let row = json!({"bvid":"BV1xx411c7mD","title":"Video","pic":empty,"cover":"//i0.hdslb.com/fallback.jpg",
+            "author":empty,"uploader":"UP","length":empty,"duration":"2:00",
+            "play":empty,"views":4,"pubdate":empty,"published":17});
+        let video = parse_video(&row).unwrap().unwrap();
+        assert_eq!(video.cover.as_deref(), Some("//i0.hdslb.com/fallback.jpg"));
+        assert_eq!(video.uploader, "UP");
+        assert_eq!(video.duration, "2:00");
+        assert_eq!(video.views, Some(4));
+        assert_eq!(video.published, Some(17));
+    }
+    let video = parse_video(&json!({"bvid":"BV1xx411c7mD","title":"Video","play":0,"views":4}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(video.views, Some(0));
+}
+
+#[tokio::test]
+#[ignore = "Queries public Bilibili search for KAYGEZ without using saved credentials"]
+async fn live_bilibili_search_kaygez() {
+    let api = Bilibili::new(None).unwrap();
+    for kind in [SearchKind::All, SearchKind::Video, SearchKind::Uploader] {
+        let result = api.search("KAYGEZ", 1, kind).await.unwrap();
+        println!(
+            "{kind:?}: {} videos, {} creators",
+            result.videos.len(),
+            result.uploaders.len()
+        );
+    }
+}
 #[test]
 fn search_kinds_parse_uploaders_and_mixed_groups_without_losing_pagination() {
     let creator = json!({"mid":"123","uname":"<em>UP</em> &amp; name","usign":"hello","fans":"234","videos":5});
@@ -118,7 +202,7 @@ fn unsupported_pcdn_primary_uses_the_service_https_backup() {
     let mut value = response();
     value["data"]["timelength"] = json!(212393);
     value["data"]["dash"]["video"][1]["baseUrl"] = json!("https://pcdn.bilivideo.cn:8082/video");
-    let parsed = parse_playback(&value, "BV1xx411c7mD", 12).unwrap();
+    let parsed = parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY).unwrap();
     assert_eq!(parsed.video.urls[0].host_str(), Some("b.bilivideo.com"));
     assert!((parsed.duration - 212.393).abs() < 0.001);
 }
@@ -134,7 +218,7 @@ async fn live_bilibili_qr_stays_pending_without_phone_confirmation() {
 }
 #[test]
 fn playback_selects_avc_aac_and_only_actual_qualities() {
-    let parsed = parse_playback(&response(), "BV1xx411c7mD", 12).unwrap();
+    let parsed = parse_playback(&response(), "BV1xx411c7mD", 12, DEFAULT_QUALITY).unwrap();
     assert!(parsed.video.codec.starts_with("avc"));
     assert_eq!(parsed.video.urls.len(), 2);
     assert!(parsed.audio.unwrap().codec.starts_with("mp4a"));
@@ -153,6 +237,87 @@ fn playback_selects_avc_aac_and_only_actual_qualities() {
         ]
     );
 }
+
+#[test]
+fn default_quality_prefers_1080_then_720_and_respects_server_permissions_and_stream_order() {
+    let mut value = response();
+    value["data"]["dash"]["video"]
+        .as_array_mut()
+        .unwrap()
+        .insert(
+            0,
+            json!({"id":120,"codecid":7,"codecs":"avc1","baseUrl":"https://a.bilivideo.com/4k"}),
+        );
+    assert_eq!(
+        parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY)
+            .unwrap()
+            .quality,
+        80
+    );
+    assert_eq!(
+        parse_playback(&value, "BV1xx411c7mD", 12, 64)
+            .unwrap()
+            .quality,
+        64
+    );
+    value["data"]["quality"] = json!(64);
+    assert_eq!(
+        parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY)
+            .unwrap()
+            .quality,
+        64
+    );
+    value["data"]["quality"] = json!(80);
+    value["data"]["dash"]["video"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|v| v["id"] != 80 || v["codecid"] != 7);
+    assert_eq!(
+        parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY)
+            .unwrap()
+            .quality,
+        64
+    );
+    value["data"]["quality"] = json!(32);
+    value["data"]["dash"]["video"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":32,"codecid":7,"codecs":"avc1","baseUrl":"https://a.bilivideo.com/480"}));
+    assert_eq!(
+        parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY)
+            .unwrap()
+            .quality,
+        32
+    );
+}
+
+#[test]
+fn unavailable_1080_cdn_falls_back_to_720_without_exposing_invalid_urls() {
+    let mut value = response();
+    value["data"]["dash"]["video"][1]["baseUrl"] = json!("https://127.0.0.1/private");
+    value["data"]["dash"]["video"][1]["backupUrl"] = json!([]);
+    let parsed = parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY).unwrap();
+    assert_eq!(parsed.quality, 64);
+    assert!(parsed.qualities.iter().all(|q| q.id != 80));
+    assert_eq!(parsed.video.urls[0].path(), "/720");
+}
+
+#[tokio::test]
+#[ignore = "Fetches public video metadata and authorized playback URLs, without downloading media"]
+async fn live_bilibili_default_quality() {
+    let api = Bilibili::new(None).unwrap();
+    let detail = api.detail("BV1GJ411x7h7").await.unwrap();
+    let playback = api
+        .resolve(&detail.bvid, detail.parts[0].cid, DEFAULT_QUALITY)
+        .await
+        .unwrap();
+    assert!(playback.quality <= DEFAULT_QUALITY);
+    println!(
+        "Default playback quality: {}; {} authorized choices",
+        playback.quality,
+        playback.qualities.len()
+    );
+}
 #[test]
 fn unsupported_codecs_and_missing_urls_fail_explicitly() {
     let mut value = response();
@@ -160,10 +325,10 @@ fn unsupported_codecs_and_missing_urls_fail_explicitly() {
         .as_array_mut()
         .unwrap()
         .retain(|v| v["codecid"] == 12);
-    assert!(parse_playback(&value, "BV1xx411c7mD", 12).is_err());
+    assert!(parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY).is_err());
     let mut value = response();
     value["data"]["dash"]["audio"][0]["codecs"] = json!("ec-3");
-    assert!(parse_playback(&value, "BV1xx411c7mD", 12).is_err());
+    assert!(parse_playback(&value, "BV1xx411c7mD", 12, DEFAULT_QUALITY).is_err());
 }
 #[test]
 fn urls_cannot_redirect_credentials_or_proxy_local_networks() {

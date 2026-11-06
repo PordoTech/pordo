@@ -25,11 +25,60 @@ pub struct Entry {
     pub known: HashSet<String>,
     pub read: HashSet<String>,
     pub new_unread: HashSet<String>,
+    pub update_summary: Option<UpdateSummary>,
+    pub summary_unread: bool,
     pub mode: Option<ReadingMode>,
     pub zoom: f32,
 }
 impl Entry {
+    pub fn has_updates(&self) -> bool {
+        self.summary_unread || !self.new_unread.is_empty()
+    }
+    /// Summary checks never replace the directory or change reading progress.
+    pub fn refresh_summary(&mut self, summary: UpdateSummary) {
+        if self
+            .update_summary
+            .as_ref()
+            .is_some_and(|old| old.updated_at > summary.updated_at)
+        {
+            return;
+        }
+        let changed = match &self.update_summary {
+            Some(old) => old != &summary,
+            None => [
+                (ChapterKind::Chapter, &summary.last_chapter),
+                (ChapterKind::Volume, &summary.last_volume),
+            ]
+            .into_iter()
+            .filter(|(_, serial)| !serial.is_empty())
+            .any(|(kind, serial)| {
+                !self.chapters.iter().any(|c| {
+                    let local = c.name.split_whitespace().nth(1).unwrap_or("");
+                    c.kind == kind
+                        && (local == serial
+                            || serial
+                                .parse::<f64>()
+                                .ok()
+                                .zip(local.parse::<f64>().ok())
+                                .is_some_and(|(a, b)| a == b))
+                })
+            }),
+        };
+        self.summary_unread |= self.favorite && changed;
+        self.update_summary = Some(summary);
+        self.checked = now();
+        self.check_error = None;
+    }
     pub fn refresh(&mut self, detail: Detail) {
+        if let Some(summary) = &detail.summary
+            && self
+                .update_summary
+                .as_ref()
+                .is_none_or(|old| old.updated_at <= summary.updated_at)
+        {
+            self.update_summary = Some(summary.clone());
+            self.summary_unread = false;
+        }
         // Unique title matching preserves read state when a source changes URLs.
         for chapter in &detail.chapters {
             if self.known.contains(chapter.key()) {
@@ -96,6 +145,7 @@ impl Entry {
         self.favorite = favorite;
         if !favorite {
             self.new_unread.clear();
+            self.summary_unread = false;
         }
         self.known
             .extend(self.chapters.iter().map(|c| c.key().to_owned()));
@@ -158,4 +208,92 @@ impl Library {
 
 pub fn sort_favorites(entries: &mut [Entry]) {
     entries.sort_by_cached_key(|e| (std::cmp::Reverse(e.favorited_at), e.book.key()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(chapter: &str, date: &str) -> UpdateSummary {
+        UpdateSummary {
+            updated_at: date.into(),
+            last_chapter: chapter.into(),
+            last_volume: "".into(),
+        }
+    }
+    fn chapter(id: &str, serial: &str) -> Chapter {
+        Chapter {
+            id: id.into(),
+            name: format!("第 {serial} 话"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn summaries_preserve_directory_progress_and_unread_state_across_restart() {
+        let mut entry = Entry {
+            favorite: true,
+            chapters: vec![chapter("one", "01")],
+            progress: Some(Progress {
+                chapter: "one".into(),
+                page: 7,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        entry.known.insert("one".into());
+        let first = summary("1", "2026-01-01T00:00:00Z");
+        entry.refresh_summary(first.clone());
+        assert!(
+            !entry.has_updates(),
+            "first matching summary establishes a baseline"
+        );
+        let latest = summary("2.5", "2026-01-02T00:00:00Z");
+        entry.refresh_summary(latest.clone());
+        assert!(entry.has_updates());
+        assert!(
+            entry.new_unread.is_empty(),
+            "unknown chapter IDs must not be invented"
+        );
+        assert_eq!(entry.chapters.len(), 1);
+        assert_eq!(entry.progress.as_ref().unwrap().page, 7);
+        let mut restored: Entry =
+            serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+        restored.refresh_summary(latest.clone());
+        assert!(
+            restored.has_updates(),
+            "an unchanged check must not acknowledge updates"
+        );
+        restored.refresh_summary(first);
+        assert_eq!(restored.update_summary.as_ref(), Some(&latest));
+        restored.refresh(Detail {
+            book: restored.book.clone(),
+            chapters: vec![chapter("one", "01"), chapter("two", "2.5")],
+            summary: Some(latest),
+        });
+        assert!(!restored.summary_unread);
+        assert!(restored.new_unread.contains("two"));
+        restored.mark_read("two");
+        assert!(!restored.has_updates());
+        assert_eq!(restored.progress.as_ref().unwrap().page, 7);
+    }
+
+    #[test]
+    fn first_check_detects_outdated_directories_and_older_details_cannot_clear_the_dot() {
+        let mut entry: Entry =
+            serde_json::from_value(serde_json::json!({"favorite":true})).unwrap();
+        entry.chapters = vec![chapter("one", "1")];
+        let current = summary("3", "2026-01-03T00:00:00Z");
+        entry.refresh_summary(current.clone());
+        assert!(entry.summary_unread);
+        entry.refresh(Detail {
+            book: entry.book.clone(),
+            chapters: vec![chapter("one", "1")],
+            summary: Some(summary("2", "2026-01-02T00:00:00Z")),
+        });
+        assert!(entry.summary_unread);
+        assert_eq!(entry.update_summary, Some(current));
+        entry.set_favorite(false);
+        assert!(!entry.has_updates());
+    }
 }

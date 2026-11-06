@@ -50,6 +50,28 @@ impl Sources {
     }
 }
 impl ComicSource for Sources {
+    fn update_policy(&self, book: &Book) -> UpdatePolicy {
+        self.provider(book)
+            .map(|source| source.update_policy(book))
+            .unwrap_or_default()
+    }
+    fn update_summaries<'a>(
+        &'a self,
+        books: &'a [Book],
+    ) -> BoxFuture<'a, Result<Option<UpdateSummaries>>> {
+        Box::pin(async move {
+            let Some(book) = books.first() else {
+                return Ok(Some(Vec::new()));
+            };
+            ensure!(
+                books
+                    .iter()
+                    .all(|b| b.provider == book.provider && b.site == book.site),
+                "更新检查包含不同来源 / Mixed update providers"
+            );
+            self.provider(book)?.update_summaries(books).await
+        })
+    }
     fn image_policy(&self, book: &Book) -> ImagePolicy {
         self.provider(book)
             .map(|source| source.image_policy(book))

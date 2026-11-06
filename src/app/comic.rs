@@ -13,6 +13,7 @@ mod catalog;
 mod images;
 mod preferences;
 mod reader;
+mod updates;
 #[cfg(test)]
 pub(super) mod visual_tests;
 
@@ -284,10 +285,10 @@ pub(super) struct State {
     unread_only: bool,
     chapter_filter: Option<domain::ChapterKind>,
     update_queue: VecDeque<Book>,
-    update_job: Option<(String, Job<Detail>)>,
+    update_jobs: Vec<updates::UpdateJob>,
     update_done: usize,
     update_total: usize,
-    update_after: Instant,
+    update_after: HashMap<String, Instant>,
     last_update_started: Option<Instant>,
     automatic_checked: bool,
     translations: VecDeque<TranslationRequest>,
@@ -532,10 +533,10 @@ impl State {
             unread_only: false,
             chapter_filter: Some(domain::ChapterKind::Chapter),
             update_queue: VecDeque::new(),
-            update_job: None,
+            update_jobs: Vec::new(),
             update_done: 0,
             update_total: 0,
-            update_after: Instant::now(),
+            update_after: HashMap::new(),
             last_update_started: None,
             automatic_checked: false,
             translations: VecDeque::new(),
@@ -745,48 +746,11 @@ impl State {
             self.automatic_checked = true;
             self.refresh_on_home(settings, Instant::now());
         }
-        if self.update_job.is_none()
-            && Instant::now() >= self.update_after
-            && let Some(source) = &self.source
-            && let Some(book) = self.update_queue.pop_front()
-        {
-            let key = book.key();
-            let source = source.clone();
-            self.update_job = Some((
-                key,
-                Job::spawn(move |_| async move { source.detail(&book).await }),
-            ));
-        }
-        if let Some((key, result)) = self
-            .update_job
-            .as_ref()
-            .and_then(|(key, job)| job.poll().map(|r| (key.clone(), r)))
-        {
-            self.update_job = None;
-            self.update_done += 1;
-            self.update_after = Instant::now() + Duration::from_secs(2);
-            if let Some(lib) = &mut self.library {
-                let result = match result {
-                    Ok(detail) => lib.refresh(detail),
-                    Err(error) => {
-                        if let Some(mut entry) = lib.get(&key).cloned() {
-                            entry.check_error = Some(error.to_string());
-                            entry.checked = domain::now();
-                            lib.save(entry)
-                        } else {
-                            Ok(())
-                        }
-                    }
-                };
-                if let Err(error) = result {
-                    self.status = error.to_string();
-                }
-            }
-        }
+        self.poll_updates(Instant::now());
         self.poll_translations(ctx, settings);
         if !self.search.is_empty()
             || self.detail_job.is_some()
-            || self.update_job.is_some()
+            || self.updates_running()
             || self.translation.is_some()
             || !self.cover_jobs.is_empty()
             || self
@@ -798,30 +762,6 @@ impl State {
         } else {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
-    }
-    pub(super) fn refresh_on_home(&mut self, settings: &crate::settings::Settings, now: Instant) {
-        if settings.comics.check_updates
-            && self
-                .last_update_started
-                .is_none_or(|last| now.saturating_duration_since(last) >= UPDATE_INTERVAL)
-        {
-            self.begin_updates(now);
-        }
-    }
-    fn begin_updates(&mut self, now: Instant) {
-        if self.update_job.is_some() || !self.update_queue.is_empty() {
-            return;
-        }
-        self.update_queue = self
-            .entries()
-            .iter()
-            .filter(|e| e.favorite)
-            .map(|e| e.book.clone())
-            .collect();
-        self.update_total = self.update_queue.len();
-        self.update_done = 0;
-        self.last_update_started = Some(now);
-        self.update_after = now;
     }
     fn open_book(&mut self, book: Book) {
         self.flush();

@@ -69,6 +69,15 @@ impl Chapter {
 pub struct Detail {
     pub book: Book,
     pub chapters: Vec<Chapter>,
+    pub summary: Option<UpdateSummary>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct UpdateSummary {
+    pub updated_at: String,
+    pub last_chapter: String,
+    pub last_volume: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Site {

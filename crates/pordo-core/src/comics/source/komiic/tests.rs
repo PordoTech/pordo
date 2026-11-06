@@ -65,6 +65,8 @@ struct Mock {
     base: String,
     tickets: Arc<AtomicUsize>,
     images: Arc<AtomicUsize>,
+    updates: Arc<AtomicUsize>,
+    details: Arc<AtomicUsize>,
     mode: u8,
 }
 fn runtime() -> tokio::runtime::Runtime {
@@ -74,7 +76,7 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 fn comic() -> Value {
-    json!({"id":"217","title":"葬送的芙莉莲","status":"ONGOING","description":"简介","imageUrl":"https://public.komiic.com/cover.jpg","authors":[{"name":"作者"}]})
+    json!({"id":"217","title":"葬送的芙莉莲","status":"ONGOING","description":"简介","imageUrl":"https://public.komiic.com/cover.jpg","authors":[{"name":"作者"}],"dateUpdated":"2026-05-27T03:04:19Z","lastChapterUpdate":"10","lastBookUpdate":"01"})
 }
 async fn query(State(state): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
     let data = match body["operationName"].as_str().unwrap() {
@@ -83,6 +85,7 @@ async fn query(State(state): State<Mock>, Json(body): Json<Value>) -> Json<Value
             json!({"searchComicsAndAuthors":{"comics":[comic()]}})
         }
         "Detail" => {
+            state.details.fetch_add(1, Ordering::Relaxed);
             assert_eq!(body["variables"]["comicId"], "217");
             json!({"comicById":comic(),"chaptersByComicId":[
                 {"id":"4","serial":"10","type":"chapter"},
@@ -91,6 +94,18 @@ async fn query(State(state): State<Mock>, Json(body): Json<Value>) -> Json<Value
                 {"id":"2","serial":"02","type":"chapter"},
                 {"id":"1","serial":"01","type":"chapter"},
                 {"id":"1","serial":"01","type":"chapter"}
+            ]})
+        }
+        "UpdateSummaries" => {
+            state.updates.fetch_add(1, Ordering::Relaxed);
+            let query = body["query"].as_str().unwrap();
+            assert!(query.contains("comicByIds"));
+            assert!(!query.contains("chaptersByComicId"));
+            assert!(!query.contains("description"));
+            assert_eq!(body["variables"]["ids"], json!(["217", "218", "999"]));
+            json!({"comicByIds":[
+                {"id":"218","dateUpdated":"2026-05-28T00:00:00Z","lastChapterUpdate":"12.5","lastBookUpdate":null},
+                comic()
             ]})
         }
         "Pages" => {
@@ -138,6 +153,8 @@ async fn server(mode: u8) -> (Komiic, Mock, tokio::task::JoinHandle<()>) {
         base: base.clone(),
         tickets: Arc::default(),
         images: Arc::default(),
+        updates: Arc::default(),
+        details: Arc::default(),
         mode,
     };
     let app = Router::new()
@@ -151,6 +168,59 @@ async fn server(mode: u8) -> (Komiic, Mock, tokio::task::JoinHandle<()>) {
 }
 fn directory() -> std::path::PathBuf {
     std::path::Path::new("target/komiic-tests").join(uuid::Uuid::new_v4().to_string())
+}
+
+#[test]
+fn komiic_batch_update_checks_never_fetch_directories_or_images() {
+    runtime().block_on(async {
+        let (source, state, server) = server(0).await;
+        let books: Vec<_> = [217, 218, 999]
+            .into_iter()
+            .map(|id| Book {
+                provider: "komiic".into(),
+                site: "komiic".into(),
+                url: format!("https://komiic.com/comic/{id}"),
+                ..Default::default()
+            })
+            .collect();
+        let summaries = source.update_summaries(&books).await.unwrap().unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].0, books[0].key());
+        assert_eq!(summaries[0].1.last_chapter, "10");
+        assert_eq!(summaries[1].0, books[1].key());
+        assert_eq!(summaries[1].1.last_chapter, "12.5");
+        assert_eq!(summaries[1].1.last_volume, "");
+        assert_eq!(state.updates.load(Ordering::Relaxed), 1);
+        assert_eq!(state.details.load(Ordering::Relaxed), 0);
+        assert_eq!(state.tickets.load(Ordering::Relaxed), 0);
+        assert_eq!(state.images.load(Ordering::Relaxed), 0);
+        server.abort();
+    });
+}
+
+#[test]
+#[ignore = "Reads two public comic summaries from the real Komiic service, without credentials"]
+fn komiic_live_batch_update_summaries() {
+    runtime().block_on(async {
+        let source = Komiic::at("https://komiic.com").unwrap();
+        let books: Vec<_> = [217, 218]
+            .into_iter()
+            .map(|id| Book {
+                provider: "komiic".into(),
+                site: "komiic".into(),
+                url: format!("https://komiic.com/comic/{id}"),
+                ..Default::default()
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        let summaries = source.update_summaries(&books).await.unwrap().unwrap();
+        assert_eq!(summaries.len(), 2);
+        println!(
+            "Fetched {} summaries in {:?}; no directories or images requested",
+            summaries.len(),
+            start.elapsed()
+        );
+    });
 }
 
 #[test]

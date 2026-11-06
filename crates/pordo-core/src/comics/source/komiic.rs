@@ -160,6 +160,17 @@ impl Komiic {
             url: format!("https://komiic.com/comic/{id}"),
         })
     }
+    fn summary(value: &Value) -> Result<UpdateSummary> {
+        let updated_at = value["dateUpdated"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("Komiic 缺少更新时间 / Missing update timestamp"))?;
+        Ok(UpdateSummary {
+            updated_at: updated_at.into(),
+            last_chapter: value["lastChapterUpdate"].as_str().unwrap_or("").into(),
+            last_volume: value["lastBookUpdate"].as_str().unwrap_or("").into(),
+        })
+    }
     fn ticket(&self, kid: String, refreshable: bool) -> BoxFuture<'_, Result<ImageRequest>> {
         Box::pin(async move {
             let session = self.sessions.current();
@@ -204,6 +215,38 @@ impl Komiic {
     }
 }
 impl ComicSource for Komiic {
+    fn update_policy(&self, _book: &Book) -> UpdatePolicy {
+        UpdatePolicy {
+            batch_size: 50,
+            ..Default::default()
+        }
+    }
+    fn update_summaries<'a>(
+        &'a self,
+        books: &'a [Book],
+    ) -> BoxFuture<'a, Result<Option<UpdateSummaries>>> {
+        Box::pin(async move {
+            ensure!(books.len() <= 50, "更新批次过大 / Update batch too large");
+            if books.is_empty() {
+                return Ok(Some(Vec::new()));
+            }
+            let ids = books
+                .iter()
+                .map(|b| Self::id(&b.url, "comic"))
+                .collect::<Result<Vec<_>>>()?;
+            let value = self.query("UpdateSummaries", "query UpdateSummaries($ids:[ID!]!){comicByIds(comicIds:$ids){id dateUpdated lastChapterUpdate lastBookUpdate}}", json!({"ids":ids})).await?;
+            let records = value["comicByIds"]
+                .as_array()
+                .ok_or_else(|| anyhow!("Komiic 更新格式已变化 / Invalid update summaries"))?;
+            let mut summaries = Vec::new();
+            for (book, id) in books.iter().zip(ids) {
+                if let Some(record) = records.iter().find(|r| r["id"].as_str() == Some(&id)) {
+                    summaries.push((book.key(), Self::summary(record)?));
+                }
+            }
+            Ok(Some(summaries))
+        })
+    }
     fn image_policy(&self, _book: &Book) -> ImagePolicy {
         ImagePolicy {
             concurrency: 2,
@@ -250,7 +293,7 @@ impl ComicSource for Komiic {
     fn detail<'a>(&'a self, book: &'a Book) -> BoxFuture<'a, Result<Detail>> {
         Box::pin(async move {
             let id = Self::id(&book.url, "comic")?;
-            let value = self.query("Detail", "query Detail($comicId:ID!){comicById(comicId:$comicId){id title description status imageUrl authors{name}} chaptersByComicId(comicId:$comicId){id serial type size}}", json!({"comicId":id})).await?;
+            let value = self.query("Detail", "query Detail($comicId:ID!){comicById(comicId:$comicId){id title description status imageUrl authors{name} dateUpdated lastChapterUpdate lastBookUpdate} chaptersByComicId(comicId:$comicId){id serial type size}}", json!({"comicId":id})).await?;
             let normalized = Self::book(&value["comicById"])?;
             ensure!(
                 normalized.url == book.url,
@@ -321,6 +364,7 @@ impl ComicSource for Komiic {
             Ok(Detail {
                 book: normalized,
                 chapters,
+                summary: Some(Self::summary(&value["comicById"])?),
             })
         })
     }

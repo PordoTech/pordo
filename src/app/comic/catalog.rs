@@ -6,15 +6,13 @@ impl State {
         let updates = self
             .entries()
             .iter()
-            .filter(|e| e.favorite && !e.new_unread.is_empty())
+            .filter(|e| e.favorite && e.has_updates())
             .count();
-        let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
-        let action_width = design::CONTROL_HEIGHT;
-        let mut tabs = workspace::child(
-            ui,
-            "comic-catalog-tabs",
-            Rect::from_min_max(header.min, header.max - vec2(action_width + 12.0, 0.0)),
+        let header = Rect::from_min_size(
+            ui.available_rect_before_wrap().min,
+            vec2(ui.available_width(), 36.0),
         );
+        let action_width = design::CONTROL_HEIGHT;
         let mut selected = match self.tab {
             Tab::Shelf => 0,
             Tab::Search => 1,
@@ -22,7 +20,7 @@ impl State {
             Tab::History => 3,
         };
         design::tabs(
-            &mut tabs,
+            ui,
             &mut selected,
             &[
                 l.text("书架", "Library"),
@@ -44,11 +42,14 @@ impl State {
             ui,
             "comic-check-updates",
             Rect::from_min_size(
-                pos2(header.max.x - action_width, header.min.y),
+                pos2(
+                    header.max.x - action_width,
+                    header.center().y - action_width * 0.5,
+                ),
                 vec2(action_width, design::CONTROL_HEIGHT),
             ),
         );
-        let updating = self.update_job.is_some() || !self.update_queue.is_empty();
+        let updating = self.updates_running();
         if updating {
             action.centered_and_justified(|ui| {
                 ui.spinner();
@@ -75,7 +76,7 @@ impl State {
         {
             self.begin_updates(Instant::now());
         }
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         if self.tab == Tab::Search {
             self.search_controls(ui, settings);
             let groups: Vec<_> = self
@@ -153,7 +154,7 @@ impl State {
                             Tab::Shelf => e.favorite,
                             Tab::History => e.last_read > 0,
                             Tab::Updates => {
-                                e.favorite && (!e.new_unread.is_empty() || e.check_error.is_some())
+                                e.favorite && (e.has_updates() || e.check_error.is_some())
                             }
                             Tab::Search => false,
                         })
@@ -320,7 +321,7 @@ impl State {
                         }
                         let entry = self.library.as_ref().and_then(|lib| lib.get(&book.key()));
                         let selected = entry.is_some_and(|e| e.favorite);
-                        if entry.is_some_and(|e| e.favorite && !e.new_unread.is_empty()) {
+                        if entry.is_some_and(|e| e.favorite && e.has_updates()) {
                             ui.painter().circle_filled(
                                 cover.min + vec2(12.0, 12.0),
                                 4.0,
@@ -335,23 +336,48 @@ impl State {
                         text.style_mut().interaction.selectable_labels = false;
                         text.spacing_mut().item_spacing.y = 3.0;
                         text.add(egui::Label::new(RichText::new(&book.title).strong()).truncate());
-                        let subtitle = if let Some(entry) = entry.filter(|e| !e.chapters.is_empty())
-                        {
-                            format!(
-                                "{} · {} {}",
-                                book.site_name,
-                                entry.chapters.len(),
-                                l.text("话", "chapters")
-                            )
-                        } else {
-                            book.site_name.clone()
-                        };
+                        let subtitle =
+                            if let Some(summary) = entry.and_then(|e| e.update_summary.as_ref()) {
+                                let mut latest = Vec::new();
+                                if !summary.last_chapter.is_empty() {
+                                    latest.push(format!(
+                                        "{}{}{}",
+                                        l.text("第", "Ch. "),
+                                        summary.last_chapter,
+                                        l.text("话", "")
+                                    ));
+                                }
+                                if !summary.last_volume.is_empty() {
+                                    latest.push(format!(
+                                        "{}{}{}",
+                                        l.text("第", "Vol. "),
+                                        summary.last_volume,
+                                        l.text("卷", "")
+                                    ));
+                                }
+                                if latest.is_empty() {
+                                    book.site_name.clone()
+                                } else {
+                                    format!("{} · {}", book.site_name, latest.join(" / "))
+                                }
+                            } else if let Some(entry) = entry.filter(|e| !e.chapters.is_empty()) {
+                                format!(
+                                    "{} · {} {}",
+                                    book.site_name,
+                                    entry.chapters.len(),
+                                    l.text("话", "chapters")
+                                )
+                            } else {
+                                book.site_name.clone()
+                            };
                         text.add(
                             egui::Label::new(RichText::new(subtitle).small().color(MUTED))
                                 .truncate(),
                         );
                         if let Some(entry) = entry {
-                            let status = if !entry.new_unread.is_empty() {
+                            let status = if entry.summary_unread {
+                                l.text("有更新", "Updated").into()
+                            } else if !entry.new_unread.is_empty() {
                                 format!(
                                     "{} {}",
                                     entry.new_unread.len(),

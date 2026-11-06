@@ -36,6 +36,7 @@ const API: &str = "https://api.bilibili.com";
 const PASSPORT: &str = "https://passport.bilibili.com";
 pub const REFERER: &str = "https://www.bilibili.com/";
 pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+pub const DEFAULT_QUALITY: u32 = 80;
 const LIMIT: usize = 4 * 1024 * 1024;
 
 // Deliberately no Debug: neither cookies nor refresh tokens belong in logs.
@@ -81,15 +82,15 @@ fn login_stage(value: &Value) -> Result<LoginStage> {
 pub struct Video {
     pub bvid: String,
     pub title: String,
-    #[serde(default, alias = "author")]
+    #[serde(default)]
     pub uploader: String,
-    #[serde(default, alias = "length", deserialize_with = "string_field")]
+    #[serde(default, deserialize_with = "string_field")]
     pub duration: String,
-    #[serde(default, alias = "pic")]
+    #[serde(default)]
     pub cover: Option<String>,
-    #[serde(default, alias = "play", deserialize_with = "optional_number")]
+    #[serde(default, deserialize_with = "optional_number")]
     pub views: Option<u64>,
-    #[serde(default, alias = "pubdate", deserialize_with = "optional_number")]
+    #[serde(default, deserialize_with = "optional_number")]
     pub published: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -99,7 +100,7 @@ pub enum SearchKind {
     Video,
     Uploader,
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Uploader {
     #[serde(deserialize_with = "number_field")]
     pub mid: u64,
@@ -110,7 +111,7 @@ pub struct Uploader {
     pub fans: u64,
     #[serde(default, deserialize_with = "number_field")]
     pub videos: u64,
-    #[serde(default, alias = "upic")]
+    #[serde(default)]
     pub avatar: Option<String>,
 }
 fn optional_number<'de, D: serde::Deserializer<'de>>(
@@ -459,7 +460,7 @@ impl Bilibili {
                 ]),
             )
             .await?;
-        parse_playback(&value, bvid, cid)
+        parse_playback(&value, bvid, cid, quality)
     }
     /// Dedicated media client: account cookies must never go to CDN hosts.
     pub fn media_client() -> Result<Client> {
@@ -531,6 +532,23 @@ fn clean_title(value: &str) -> String {
         .map(|s| s.into_owned())
         .unwrap_or_else(|_| plain.into_owned())
 }
+
+/// The API can return both its native field and the normalized field together.
+/// Prefer a nonempty native field; null/empty aliases retain the fallback value.
+fn search_row<T: serde::de::DeserializeOwned>(value: &Value, fields: &[(&str, &str)]) -> Result<T> {
+    let mut value = value.clone();
+    if let Some(row) = value.as_object_mut() {
+        for &(native, normalized) in fields {
+            if let Some(field) = row.remove(native)
+                && !field.is_null()
+                && !field.as_str().is_some_and(|s| s.trim().is_empty())
+            {
+                row.insert(normalized.into(), field);
+            }
+        }
+    }
+    Ok(serde_json::from_value(value)?)
+}
 fn parse_search(value: &Value, kind: SearchKind) -> Result<SearchPage> {
     let data = checked(value)?;
     let rows: &[Value] = match data.get("result") {
@@ -543,7 +561,7 @@ fn parse_search(value: &Value, kind: SearchKind) -> Result<SearchPage> {
     let mut collect = |rows: &[Value], kind: SearchKind| -> Result<()> {
         for row in rows {
             if kind == SearchKind::Uploader {
-                let mut uploader: Uploader = serde_json::from_value(row.clone())?;
+                let mut uploader: Uploader = search_row(row, &[("upic", "avatar")])?;
                 uploader.uname = clean_title(&uploader.uname);
                 uploader.usign = clean_title(&uploader.usign);
                 if uploader.mid > 0 {
@@ -581,7 +599,16 @@ fn parse_search(value: &Value, kind: SearchKind) -> Result<SearchPage> {
     })
 }
 fn parse_video(value: &Value) -> Result<Option<Video>> {
-    let video: Video = serde_json::from_value(value.clone())?;
+    let video: Video = search_row(
+        value,
+        &[
+            ("author", "uploader"),
+            ("length", "duration"),
+            ("pic", "cover"),
+            ("play", "views"),
+            ("pubdate", "published"),
+        ],
+    )?;
     Ok(valid_bvid(&video.bvid).then(|| Video {
         title: clean_title(&video.title),
         ..video
@@ -657,7 +684,7 @@ fn stream(value: &Value) -> Result<Stream> {
         codec: text(value, "codecs"),
     })
 }
-fn parse_playback(value: &Value, bvid: &str, cid: u64) -> Result<Playback> {
+fn parse_playback(value: &Value, bvid: &str, cid: u64, requested: u32) -> Result<Playback> {
     let data = checked(value)?;
     let formats = data["support_formats"].as_array();
     let mut qualities = Vec::new();
@@ -669,14 +696,17 @@ fn parse_playback(value: &Value, bvid: &str, cid: u64) -> Result<Playback> {
     let avc: Vec<_> = videos
         .iter()
         .filter(|v| v["codecid"] == 7 || v["codecs"].as_str().is_some_and(|s| s.starts_with("avc")))
+        .filter_map(|v| {
+            let id = u32::try_from(v["id"].as_u64()?).ok().filter(|id| *id > 0)?;
+            Some((id, stream(v).ok()?))
+        })
         .collect();
-    for v in &avc {
-        let id = v["id"].as_u64().unwrap_or(0) as u32;
-        if id == 0 || qualities.iter().any(|q: &Quality| q.id == id) {
+    for (id, _) in &avc {
+        if qualities.iter().any(|q: &Quality| q.id == *id) {
             continue;
         }
         let label = formats
-            .and_then(|f| f.iter().find(|f| f["quality"] == id))
+            .and_then(|f| f.iter().find(|f| f["quality"] == *id))
             .map(|f| {
                 ["new_description", "display_desc", "description"]
                     .iter()
@@ -686,16 +716,23 @@ fn parse_playback(value: &Value, bvid: &str, cid: u64) -> Result<Playback> {
             })
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("{id}"));
-        qualities.push(Quality { id, label });
+        qualities.push(Quality { id: *id, label });
     }
     qualities.sort_by_key(|q| std::cmp::Reverse(q.id));
     let actual = data["quality"].as_u64().unwrap_or(0) as u32;
-    let video = avc
+    // Respect the server's account limit and the requested ceiling. In
+    // particular, never take an arbitrary first DASH entry (e.g. 4K) when
+    // 1080P is unavailable; choose 720P, then a lower available AVC stream.
+    let ceiling = if actual > 0 {
+        requested.min(actual)
+    } else {
+        requested
+    };
+    let (quality, video) = avc
         .iter()
-        .find(|v| v["id"] == actual)
-        .or_else(|| avc.first())
+        .filter(|(id, _)| *id <= ceiling)
+        .max_by_key(|(id, _)| *id)
         .ok_or_else(|| anyhow!("该画质无 H.264 视频，请尝试其他画质 / No H.264 video available"))?;
-    let quality = video["id"].as_u64().unwrap_or(0) as u32;
     let audio = dash["audio"]
         .as_array()
         .and_then(|items| {
@@ -713,7 +750,7 @@ fn parse_playback(value: &Value, bvid: &str, cid: u64) -> Result<Playback> {
     Ok(Playback {
         bvid: bvid.into(),
         cid,
-        quality,
+        quality: *quality,
         duration: data["timelength"]
             .as_f64()
             .filter(|d| *d > 0.0)
@@ -721,7 +758,7 @@ fn parse_playback(value: &Value, bvid: &str, cid: u64) -> Result<Playback> {
             .or_else(|| dash["duration"].as_f64())
             .unwrap_or(0.0),
         qualities,
-        video: stream(video)?,
+        video: video.clone(),
         audio,
     })
 }

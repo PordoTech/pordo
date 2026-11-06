@@ -40,6 +40,8 @@ QQ local adapters prepare supported encrypted audio in bounded, cancellable work
 
 `ComicSource` isolates search, details, chapters and page requests. Stable identities include provider/site and upstream work identity; equal titles are not merged. SQLite stores the bookshelf, chapter state and reading progress.
 
+Update policies and optional batched summaries belong to the source adapter. Komiic uses `comicByIds` with revision/latest-chapter/latest-volume fields; background checks never request its chapter directory. Summary revisions and pending update flags are stored separately from cached chapters and read progress. Directory responses carry their own revision so an older response cannot acknowledge a newer summary. Desktop update scheduling bounds global/per-site concurrency, spaces request starts, expires slow work and applies completed results independently.
+
 Original downloads are cached unchanged and detected by content. JPEG/WebP/PNG request preferences do not trigger lossy conversion of ordinary original pages. DM5 can fall back to its public reader data when aggregation fails; remote scripts are parsed for data and are not executed. Komiic requests use short-lived tickets, bounded concurrency and quota backoff; tickets and ticketed URLs are not persisted.
 
 Image decoding, resizing, tiling, cropping, composition and encoding use remdia image components in the same graph runtime as audio/video. Windows uses WIC and macOS uses ImageIO/CoreGraphics; a narrow Windows WebP plugin covers systems without a WIC WebP decoder. Processing runs in bounded background work. Prepared images use memory budgets and shared in-flight requests. Source-byte changes and explicit disk-cache clearing invalidate the corresponding memory entries.

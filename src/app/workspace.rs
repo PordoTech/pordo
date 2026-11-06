@@ -222,12 +222,7 @@ impl App {
                 Page::Home => self.home_page(&mut ui),
                 Page::Comic => {
                     if !self.comic.detail_open() {
-                        ui.label(
-                            RichText::new(language.text("漫画", "Comics"))
-                                .size(28.0)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
+                        page_heading(&mut ui, language.text("漫画", "Comics"), None);
                     }
                     self.comic
                         .ui(&mut ui, &mut self.settings, &mut self.settings_open);

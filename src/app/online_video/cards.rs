@@ -3,7 +3,7 @@ use super::*;
 use egui::{FontId, StrokeKind};
 use std::sync::OnceLock;
 
-const GAP: f32 = 16.0;
+const GAP: f32 = 12.0;
 const CACHE_LIMIT: usize = 48;
 const FETCH_LIMIT: usize = 4;
 
@@ -144,11 +144,17 @@ async fn fetch(url: reqwest::Url, avatar: bool) -> anyhow::Result<crate::media::
 pub(super) enum Action {
     Video(String),
     Creator(Uploader),
+    FavoriteCreator(Uploader),
     MoreCreators,
 }
-pub(super) fn results(ui: &mut Ui, state: &mut State, language: Language) -> Option<Action> {
+pub(super) fn results(
+    ui: &mut Ui,
+    state: &mut State,
+    language: Language,
+    favorites: &std::collections::HashSet<u64>,
+) -> Option<Action> {
     let mut action = None;
-    let creator_columns = columns(ui.available_width(), 300.0, 3);
+    let creator_columns = columns(ui.available_width(), 150.0, 6);
     if state.creator.is_none() && !state.uploaders.is_empty() {
         let preview = state.searched_kind == SearchKind::All;
         let count = if preview {
@@ -164,17 +170,14 @@ pub(super) fn results(ui: &mut Ui, state: &mut State, language: Language) -> Opt
         ) {
             action = Some(Action::MoreCreators);
         }
-        let width = card_width(ui.available_width(), creator_columns);
-        for row in state.uploaders[..count].chunks(creator_columns) {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                for creator in row {
-                    if creator_card(ui, &mut state.previews, creator, width, language).clicked() {
-                        action = Some(Action::Creator(creator.clone()));
-                    }
-                }
-            });
-            ui.add_space(GAP - 8.0);
+        if let Some(selected) = creators(
+            ui,
+            &mut state.previews,
+            &state.uploaders[..count],
+            language,
+            favorites,
+        ) {
+            action = Some(selected);
         }
         ui.add_space(12.0);
     }
@@ -185,7 +188,7 @@ pub(super) fn results(ui: &mut Ui, state: &mut State, language: Language) -> Opt
     };
     if !videos.is_empty() {
         heading(ui, language.text("视频", "Videos"), videos.len(), None);
-        let columns = columns(ui.available_width(), 264.0, 4);
+        let columns = columns(ui.available_width(), 132.0, 8);
         let width = card_width(ui.available_width(), columns);
         for row in videos.chunks(columns) {
             ui.horizontal_top(|ui| {
@@ -198,6 +201,36 @@ pub(super) fn results(ui: &mut Ui, state: &mut State, language: Language) -> Opt
             });
             ui.add_space(GAP - 8.0);
         }
+    }
+    action
+}
+pub(super) fn creators(
+    ui: &mut Ui,
+    previews: &mut Previews,
+    creators: &[Uploader],
+    language: Language,
+    favorites: &std::collections::HashSet<u64>,
+) -> Option<Action> {
+    let columns = columns(ui.available_width(), 150.0, 6);
+    let width = card_width(ui.available_width(), columns);
+    let mut action = None;
+    for row in creators.chunks(columns) {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            for creator in row {
+                if let Some(selected) = creator_card(
+                    ui,
+                    previews,
+                    creator,
+                    width,
+                    language,
+                    favorites.contains(&creator.mid),
+                ) {
+                    action = Some(selected);
+                }
+            }
+        });
+        ui.add_space(GAP - 8.0);
     }
     action
 }
@@ -309,8 +342,7 @@ fn video_card(
     language: Language,
 ) -> Response {
     let cover_height = (width - 16.0) * 9.0 / 16.0;
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(width, cover_height + 108.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 92.0), Sense::click());
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(&video.title);
@@ -329,7 +361,7 @@ fn video_card(
             .rect_filled(cover, 8, Color32::from_rgb(34, 48, 52));
         icons::paint(
             ui.painter(),
-            Rect::from_center_size(cover.center(), vec2(34.0, 34.0)),
+            Rect::from_center_size(cover.center(), vec2(24.0, 24.0)),
             Color32::from_rgb(83, 113, 113),
             icons::FILM_SLATE,
         );
@@ -352,33 +384,33 @@ fn video_card(
     if response.hovered() || response.has_focus() {
         ui.painter()
             .rect_filled(cover, 8, Color32::from_black_alpha(38));
-        let button = Rect::from_center_size(cover.center(), vec2(40.0, 40.0));
+        let button = Rect::from_center_size(cover.center(), vec2(32.0, 32.0));
         ui.painter()
-            .circle_filled(button.center(), 20.0, Color32::from_black_alpha(170));
+            .circle_filled(button.center(), 16.0, Color32::from_black_alpha(170));
         icons::paint(
             ui.painter(),
-            button.shrink(9.0).translate(vec2(1.0, 0.0)),
+            button.shrink(7.0).translate(vec2(1.0, 0.0)),
             Color32::WHITE,
             icons::PLAY,
         );
     }
-    let x = rect.min.x + 12.0;
-    let y = cover.max.y + 10.0;
+    let x = rect.min.x + 8.0;
+    let y = cover.max.y + 8.0;
     lines(
         ui,
         &video.title,
         pos2(x, y),
-        width - 24.0,
-        15.0,
+        width - 16.0,
+        13.0,
         design::TEXT,
         2,
     );
     lines(
         ui,
         &video.uploader,
-        pos2(x, y + 43.0),
-        width - 24.0,
-        12.0,
+        pos2(x, y + 36.0),
+        width - 16.0,
+        11.0,
         MUTED,
         1,
     );
@@ -398,9 +430,9 @@ fn video_card(
     lines(
         ui,
         &details.join(" · "),
-        pos2(x, y + 63.0),
-        width - 24.0,
-        11.0,
+        pos2(x, y + 53.0),
+        width - 16.0,
+        10.0,
         MUTED,
         1,
     );
@@ -412,8 +444,9 @@ fn creator_card(
     creator: &Uploader,
     width: f32,
     language: Language,
-) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 108.0), Sense::click());
+    favorite: bool,
+) -> Option<Action> {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 88.0), Sense::click());
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(format!("{} · UID {}", creator.uname, creator.mid));
@@ -422,30 +455,30 @@ fn creator_card(
     });
     surface(ui, rect, &response);
     if !ui.is_rect_visible(rect) {
-        return response;
+        return None;
     }
-    let avatar = Rect::from_min_size(rect.min + vec2(16.0, 18.0), vec2(52.0, 52.0));
+    let avatar = Rect::from_min_size(rect.min + vec2(10.0, 12.0), vec2(36.0, 36.0));
     if let Some(texture) = previews.texture(ui, avatar, creator.avatar.as_deref(), true) {
-        design::cover(ui, &texture, avatar, 26);
+        design::cover(ui, &texture, avatar, 18);
     } else {
         ui.painter()
-            .circle_filled(avatar.center(), 26.0, Color32::from_rgb(45, 68, 63));
+            .circle_filled(avatar.center(), 18.0, Color32::from_rgb(45, 68, 63));
         ui.painter().text(
             avatar.center(),
             egui::Align2::CENTER_CENTER,
             creator.uname.chars().next().unwrap_or('U'),
-            FontId::proportional(21.0),
+            FontId::proportional(16.0),
             ACCENT,
         );
     }
-    let x = avatar.max.x + 12.0;
-    let text_width = (rect.max.x - x - 22.0).max(20.0);
+    let x = avatar.max.x + 8.0;
+    let text_width = (rect.max.x - x - 34.0).max(20.0);
     lines(
         ui,
         &creator.uname,
-        pos2(x, rect.min.y + 18.0),
+        pos2(x, rect.min.y + 12.0),
         text_width,
-        15.0,
+        13.0,
         design::TEXT,
         1,
     );
@@ -456,11 +489,11 @@ fn creator_card(
         } else {
             &creator.usign
         },
-        pos2(x, rect.min.y + 43.0),
+        pos2(x, rect.min.y + 34.0),
         text_width,
-        12.0,
+        11.0,
         MUTED,
-        2,
+        1,
     );
     let stats = format!(
         "{} {}   ·   {} {}",
@@ -472,21 +505,24 @@ fn creator_card(
     lines(
         ui,
         &stats,
-        rect.min + vec2(16.0, 82.0),
-        width - 44.0,
-        12.0,
+        rect.min + vec2(10.0, 63.0),
+        width - 20.0,
+        10.0,
         Color32::from_rgb(183, 200, 193),
         1,
     );
-    let arrow =
-        Rect::from_center_size(pos2(rect.max.x - 16.0, rect.min.y + 29.0), vec2(12.0, 12.0));
-    icons::paint(
-        ui.painter(),
-        arrow,
-        if response.hovered() { ACCENT } else { MUTED },
-        icons::CARET_RIGHT,
-    );
-    response
+    let heart = Rect::from_min_size(pos2(rect.max.x - 30.0, rect.min.y + 8.0), vec2(24.0, 24.0));
+    if design::favorite_at(ui, response.id.with("favorite"), heart, favorite)
+        .on_hover_text(if favorite {
+            language.text("取消收藏UP主", "Remove creator from favorites")
+        } else {
+            language.text("收藏UP主", "Favorite creator")
+        })
+        .clicked()
+    {
+        return Some(Action::FavoriteCreator(creator.clone()));
+    }
+    response.clicked().then(|| Action::Creator(creator.clone()))
 }
 fn compact(value: u64, language: Language) -> String {
     let (unit, suffix) = match language {
@@ -519,6 +555,53 @@ fn age(timestamp: u64, language: Language) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn creator_favorite_click_does_not_open_uploads_and_card_click_still_does() {
+        let ctx = egui::Context::default();
+        let creator: Uploader =
+            serde_json::from_value(serde_json::json!({"mid":123,"uname":"KAYGEZ"})).unwrap();
+        let mut previews = Previews::default();
+        let mut render = |events| {
+            let mut action = None;
+            let mut origin = egui::Pos2::ZERO;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 240.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    origin = ui.available_rect_before_wrap().min;
+                    action =
+                        creator_card(ui, &mut previews, &creator, 180.0, Language::English, false);
+                },
+            );
+            output.textures_delta.clear();
+            (action, origin)
+        };
+        let (_, origin) = render(vec![]);
+        for (offset, favorite) in [(vec2(162.0, 20.0), true), (vec2(70.0, 25.0), false)] {
+            let point = origin + offset;
+            render(vec![egui::Event::PointerMoved(point)]);
+            render(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            let (action, _) = render(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            if favorite {
+                assert!(matches!(action, Some(Action::FavoriteCreator(c)) if c.mid == 123));
+            } else {
+                assert!(matches!(action, Some(Action::Creator(c)) if c.mid == 123));
+            }
+        }
+    }
     #[test]
     fn cards_fit_responsive_columns_and_compact_counts() {
         for width in [280.0, 628.0, 1030.0, 1500.0] {

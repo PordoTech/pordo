@@ -297,6 +297,18 @@ impl App {
             self.queue_open = !self.queue_open;
         }
         x -= 38.0;
+        if self.bilibili_controls_available() {
+            let mut quality =
+                control_slot(root, "video-bilibili-quality", pos2(x - 14.0, cy), 28.0);
+            self.bilibili_quality_button(&mut quality, alpha);
+            x -= 36.0;
+            if self.bilibili_parts_available() {
+                let mut parts =
+                    control_slot(root, "video-bilibili-parts", pos2(x - 14.0, cy), 28.0);
+                self.bilibili_parts_button(&mut parts, alpha);
+                x -= 36.0;
+            }
+        }
         let mut settings = control_slot(root, "video-settings", pos2(x - 13.0, cy), 26.0);
         self.settings_button(&mut settings, alpha);
         x -= 36.0;

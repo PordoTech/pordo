@@ -118,10 +118,10 @@ fn fixture(ctx: &egui::Context) -> State {
         unread_only: false,
         chapter_filter: Some(domain::ChapterKind::Chapter),
         update_queue: VecDeque::new(),
-        update_job: None,
+        update_jobs: Vec::new(),
         update_done: 0,
         update_total: 0,
-        update_after: Instant::now(),
+        update_after: HashMap::new(),
         last_update_started: None,
         automatic_checked: true,
         translations: VecDeque::new(),
@@ -1950,6 +1950,50 @@ fn comic_catalog_visuals() {
             design::selectable_value(ui, &mut selected, 2, "漫画相关");
         },
     );
+}
+
+#[test]
+fn comic_music_and_video_tabs_share_the_same_baseline_and_full_width_divider() {
+    let ctx = egui::Context::default();
+    let mut app = settings_fixture(&ctx);
+    let mut positions = Vec::new();
+    for (page, label) in [
+        (workspace::Page::Comic, "书架"),
+        (workspace::Page::Music, "收藏"),
+        (workspace::Page::Video, "收藏"),
+    ] {
+        app.workspace.page = page;
+        let mut output = app_frame(&ctx, &mut app, vec2(1280.0, 900.0), vec![]);
+        for _ in 0..2 {
+            output = app_frame(&ctx, &mut app, vec2(1280.0, 900.0), vec![]);
+        }
+        let text = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                Shape::Text(t) if t.galley.text() == label => Some(t),
+                _ => None,
+            })
+            .expect("first tab");
+        let divider = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.color == design::LINE
+                        && points[1].x - points[0].x > 400.0
+                        && (points[0].y - text.pos.y) > 0.0
+                        && (points[0].y - text.pos.y) < 30.0 =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .expect("full-width tab divider");
+        positions.push((text.pos.y, text.galley.size().y, divider));
+    }
+    assert_eq!(positions[0], positions[1]);
+    assert_eq!(positions[1], positions[2]);
 }
 
 #[test]

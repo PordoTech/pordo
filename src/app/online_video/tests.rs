@@ -1,4 +1,89 @@
 use super::*;
+
+#[test]
+fn search_never_shows_the_old_playback_setup_page_or_permission_hint() {
+    let ctx = egui::Context::default();
+    let mut app = comic::visual_tests::settings_fixture(&ctx);
+    app.settings.language = Language::English;
+    app.online_video.api = Some(Arc::new(Bilibili::new(None).unwrap()));
+    app.online_video.detail = Some(Detail {
+        bvid: "BV1GJ411x7h7".into(),
+        title: "Old setup heading".into(),
+        parts: vec![bilibili::Part {
+            cid: 1,
+            page: 1,
+            part: "Old setup part".into(),
+            duration: 300,
+        }],
+    });
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1100.0, 760.0))),
+            ..Default::default()
+        },
+        |ui| app.online_video_contents(ui),
+    );
+    output.textures_delta.clear();
+    let text: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(t) => Some(t.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(!text.contains(&"Old setup heading"));
+    assert!(!text.contains(&"Old setup part"));
+    assert!(!text.contains(&"Play"));
+    assert!(!text.contains(&"Available qualities depend on your account and supported codecs."));
+}
+
+#[test]
+fn video_favorites_show_creators_without_empty_video_notice_and_cancel_pending_navigation() {
+    let ctx = egui::Context::default();
+    let mut app = comic::visual_tests::settings_fixture(&ctx);
+    app.settings.language = Language::English;
+    app.workspace.page = workspace::Page::Video;
+    app.workspace.video_tab = 0;
+    app.library.records.clear();
+    let creator: Uploader =
+        serde_json::from_value(serde_json::json!({"mid":123,"uname":"Favorite UP"})).unwrap();
+    app.library.creators = vec![library::CreatorRecord {
+        uploader: creator.clone(),
+        favorite: true,
+        favorited_at: 1,
+    }];
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1100.0, 760.0))),
+                ..Default::default()
+            },
+            |ui| app.workspace_ui(ui),
+        );
+        output.textures_delta.clear();
+    }
+    let text: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(t) => Some(t.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains(&"Favorite creators"));
+    assert!(text.contains(&"Favorite UP"));
+    assert!(!text.contains(&"No favorite videos or creators"));
+    app.online_video.api = None;
+    app.online_video.init = Some(Job::spawn(|_| std::future::pending()));
+    app.open_bilibili_creator(creator);
+    assert_eq!(app.workspace.video_tab, 1);
+    assert!(app.online_video.pending_creator.is_some());
+    app.navigate(workspace::Page::Music);
+    assert!(app.online_video.pending_creator.is_none());
+    assert!(app.online_video.uploads_job.is_none());
+}
 #[test]
 fn video_search_uses_page_tabs_and_a_type_selector_left_of_the_query() {
     let ctx = egui::Context::default();
@@ -127,9 +212,11 @@ fn account_controls_live_in_video_source_settings_not_search() {
             .iter()
             .any(|s| s == "Video source settings" || s == "Bilibili website")
     );
-    assert!(!search.iter().any(|s| s == "Sign in with QR"
-        || s == "Sign out / clear session"
-        || s == "Not signed in"));
+    assert!(
+        !search
+            .iter()
+            .any(|s| s == "Sign in with QR" || s == "Sign out" || s == "Not signed in")
+    );
 }
 #[test]
 fn leaving_discovery_cancels_prepared_playback_and_qr_polling() {

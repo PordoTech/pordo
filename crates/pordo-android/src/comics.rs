@@ -307,6 +307,7 @@ pub extern "system" fn Java_dev_pordo_Native_nativeLibraryRefresh(
             book: parse_book(&text(&mut env, &book)?)?,
             chapters: serde_json::from_str(&text(&mut env, &chapters)?)
                 .map_err(|_| anyhow!("无效章节记录 / Invalid comic chapters"))?,
+            summary: None,
         };
         locked(library()?)?.refresh(detail)
     });

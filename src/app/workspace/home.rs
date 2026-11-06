@@ -86,6 +86,12 @@ impl App {
         if let Some(record) = record {
             let content = rect;
             self.record_art(ui, content, record);
+            let highlighted =
+                ui.is_enabled() && (response.contains_pointer() || response.has_focus());
+            if highlighted {
+                ui.painter()
+                    .rect_filled(content, 10, Color32::from_white_alpha(18));
+            }
             let overlay =
                 Rect::from_min_max(pos2(content.min.x, content.max.y - 104.0), content.max);
             ui.painter().rect_filled(
@@ -96,7 +102,11 @@ impl App {
                     sw: 10,
                     se: 10,
                 },
-                Color32::from_black_alpha(205),
+                if highlighted {
+                    design::HOVER.gamma_multiply(0.94)
+                } else {
+                    Color32::from_black_alpha(205)
+                },
             );
             let mut text = child(
                 ui,

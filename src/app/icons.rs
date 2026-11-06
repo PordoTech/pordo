@@ -12,7 +12,7 @@ egui_phosphor::subset! {
             INFO, CARET_DOWN, CARET_UP, CARET_LEFT, CARET_RIGHT, DOTS_THREE,
             ARROWS_CLOCKWISE, CHECK, PLAY, PAUSE, STOP, EYE, EYE_SLASH,
             SORT_ASCENDING, SORT_DESCENDING, FUNNEL, COPY, SLIDERS_HORIZONTAL,
-            SPARKLE, CLOUD_ARROW_UP, SIDEBAR_SIMPLE, IMAGES,
+            SPARKLE, CLOUD_ARROW_UP, SIDEBAR_SIMPLE, IMAGES, HIGH_DEFINITION, LIST_NUMBERS,
         };
     }
 }
@@ -86,6 +86,8 @@ mod tests {
                     CLOUD_ARROW_UP,
                     SIDEBAR_SIMPLE,
                     IMAGES,
+                    HIGH_DEFINITION,
+                    LIST_NUMBERS,
                 ] {
                     let font = egui::FontId::new(20.0, family());
                     assert!(ui.fonts_mut(|fonts| fonts.has_glyphs(&font, glyph)));

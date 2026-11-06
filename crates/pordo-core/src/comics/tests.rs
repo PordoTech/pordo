@@ -410,6 +410,7 @@ fn library_updates_history_and_url_migration_survive_restart() {
         .refresh(Detail {
             book: book.clone(),
             chapters: vec![chapter("1", "第1话")],
+            summary: None,
         })
         .unwrap();
     let mut entry = library.get(&book.key()).unwrap().clone();
@@ -426,6 +427,7 @@ fn library_updates_history_and_url_migration_survive_restart() {
         .refresh(Detail {
             book: book.clone(),
             chapters: vec![chapter("1", "第1话"), chapter("2", "番外")],
+            summary: None,
         })
         .unwrap();
     assert_eq!(library.get(&book.key()).unwrap().new_unread.len(), 1);
@@ -436,6 +438,7 @@ fn library_updates_history_and_url_migration_survive_restart() {
         .refresh(Detail {
             book: book.clone(),
             chapters: vec![chapter("new1", "第1话"), chapter("new2", "番外")],
+            summary: None,
         })
         .unwrap();
     drop(library);
@@ -466,6 +469,7 @@ fn favorite_order_is_independent_of_refresh_reading_and_restart() {
         entry.refresh(Detail {
             book: entry.book.clone(),
             chapters: vec![],
+            summary: None,
         });
         entry.last_read = u64::MAX;
         library.save(entry).unwrap();

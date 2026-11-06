@@ -46,8 +46,18 @@ pub(super) fn sort_favorites(records: &mut [Record]) {
     });
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct CreatorRecord {
+    pub uploader: crate::bilibili::Uploader,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub favorited_at: u64,
+}
+
 pub(super) struct Library {
     pub records: Vec<Record>,
+    pub creators: Vec<CreatorRecord>,
     dirty: bool,
     saved: Instant,
     path: PathBuf,
@@ -68,6 +78,10 @@ impl Library {
     }
     pub(super) fn open(path: PathBuf) -> Self {
         Self {
+            creators: std::fs::read(path.with_extension("creators.json"))
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default(),
             records: std::fs::read(&path)
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
@@ -77,6 +91,59 @@ impl Library {
             path,
             suppressed: None,
         }
+    }
+    pub fn creator_favorite(&self, mid: u64) -> bool {
+        self.creators
+            .iter()
+            .any(|r| r.uploader.mid == mid && r.favorite)
+    }
+    pub fn favorite_creators(&self, query: &str) -> Vec<crate::bilibili::Uploader> {
+        let query = query.trim().to_lowercase();
+        let mut creators: Vec<_> = self
+            .creators
+            .iter()
+            .filter(|r| {
+                r.favorite
+                    && (query.is_empty()
+                        || format!("{} {}", r.uploader.uname, r.uploader.usign)
+                            .to_lowercase()
+                            .contains(&query))
+            })
+            .collect();
+        creators.sort_by_key(|r| (std::cmp::Reverse(r.favorited_at), r.uploader.mid));
+        creators.into_iter().map(|r| r.uploader.clone()).collect()
+    }
+    pub fn toggle_creator(&mut self, creator: &crate::bilibili::Uploader) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            creator.mid > 0 && !creator.uname.trim().is_empty(),
+            "无效的UP主 / Invalid creator"
+        );
+        let favorited_at = favorite_time().max(
+            self.creators
+                .iter()
+                .map(|r| r.favorited_at)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        if let Some(record) = self
+            .creators
+            .iter_mut()
+            .find(|r| r.uploader.mid == creator.mid)
+        {
+            record.favorite = !record.favorite;
+            record.uploader = creator.clone();
+            if record.favorite {
+                record.favorited_at = favorited_at;
+            }
+        } else {
+            self.creators.push(CreatorRecord {
+                uploader: creator.clone(),
+                favorite: true,
+                favorited_at,
+            });
+        }
+        self.save_records()
     }
     pub fn remember(&mut self, record: Record) {
         if self.suppressed.as_deref() == Some(&record.path) {
@@ -214,6 +281,12 @@ impl Library {
             let temporary = path.with_extension("json.tmp");
             std::fs::write(&temporary, serde_json::to_vec(&self.records)?)?;
             std::fs::rename(temporary, path)?;
+            let creators = path.with_extension("creators.json");
+            if !self.creators.is_empty() || creators.exists() {
+                let temporary = creators.with_extension("json.tmp");
+                std::fs::write(&temporary, serde_json::to_vec(&self.creators)?)?;
+                std::fs::rename(temporary, creators)?;
+            }
             Ok(())
         })();
         if result.is_ok() {
@@ -338,6 +411,40 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creator_favorites_use_uid_preserve_media_and_survive_restart_and_removal() {
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("library.json");
+        std::fs::write(&path, br#"[{"path":"old.mp4","title":"Old video"}]"#).unwrap();
+        let mut library = Library::open(path.clone());
+        let mut creator: crate::bilibili::Uploader =
+            serde_json::from_value(serde_json::json!({"mid":123,"uname":"Same name"})).unwrap();
+        library.toggle_creator(&creator).unwrap();
+        let mut second = creator.clone();
+        second.mid = 456;
+        library.toggle_creator(&second).unwrap();
+        assert_eq!(library.favorite_creators("")[0].mid, 456);
+        creator.uname = "Renamed creator".into();
+        library.toggle_creator(&creator).unwrap();
+        assert!(!library.creator_favorite(123));
+        library.toggle_creator(&creator).unwrap();
+        assert_eq!(library.creators.len(), 2);
+        assert_eq!(library.favorite_creators("renamed")[0].mid, 123);
+        assert_eq!(library.favorite_creators("")[0].mid, 123);
+        library.toggle_creator(&second).unwrap();
+        drop(library);
+        let library = Library::open(path);
+        assert!(library.creator_favorite(123));
+        assert!(!library.creator_favorite(456));
+        assert_eq!(library.records.len(), 1);
+        assert_eq!(library.records[0].path, "old.mp4");
+        drop(library);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     #[test]
     fn favorite_timestamps_survive_metadata_binding_history_and_restart() {
         let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -9,9 +9,20 @@ mod komiic;
 mod sources;
 pub use komiic::{AccountSettings as KomiicAccount, AuthStatus as KomiicAuthStatus, Komiic};
 pub use sources::Sources;
+pub type UpdateSummaries = Vec<(String, UpdateSummary)>;
 
 /// UI and storage use normalized records, never provider-specific JSON.
 pub trait ComicSource: Send + Sync {
+    fn update_policy(&self, _book: &Book) -> UpdatePolicy {
+        UpdatePolicy::default()
+    }
+    /// None means this provider needs a single-book directory check.
+    fn update_summaries<'a>(
+        &'a self,
+        _books: &'a [Book],
+    ) -> BoxFuture<'a, Result<Option<UpdateSummaries>>> {
+        Box::pin(async { Ok(None) })
+    }
     fn image_policy(&self, _book: &Book) -> ImagePolicy {
         ImagePolicy::default()
     }
@@ -30,6 +41,22 @@ pub trait ComicSource: Send + Sync {
     }
     fn book_image_request(&self, book: &Book, url: &str) -> Result<ImageRequest> {
         self.image_request(&book.site, url)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct UpdatePolicy {
+    pub batch_size: usize,
+    pub concurrency: usize,
+    pub interval: Duration,
+}
+impl Default for UpdatePolicy {
+    fn default() -> Self {
+        Self {
+            batch_size: 1,
+            concurrency: 2,
+            interval: Duration::from_millis(500),
+        }
     }
 }
 
@@ -260,6 +287,7 @@ impl ComicSource for MangaYun {
             Ok(Detail {
                 book: details,
                 chapters,
+                summary: None,
             })
         })
     }
