@@ -42,6 +42,7 @@ struct Anchor {
     playing: bool,
     audio: bool,
     serial: u64,
+    speed: f64,
 }
 pub struct Clock {
     base: Instant,
@@ -60,6 +61,7 @@ impl Clock {
                 playing: false,
                 audio: false,
                 serial: 0,
+                speed: 1.0,
             }),
         }
     }
@@ -73,13 +75,13 @@ impl Clock {
         if a.audio {
             let (serial, epoch, end, wall_end) = self.progress.read();
             if serial > a.serial && epoch == a.epoch {
-                return (end - (wall_end - self.wall()).max(0.0))
+                return (end - (wall_end - self.wall()).max(0.0) * a.speed)
                     .max(a.media)
                     .min(end.max(a.media));
             }
             a.media
         } else {
-            a.media + (self.wall() - a.wall).max(0.0)
+            a.media + (self.wall() - a.wall).max(0.0) * a.speed
         }
     }
     pub fn now(&self) -> f64 {
@@ -94,6 +96,7 @@ impl Clock {
             playing,
             audio,
             serial: self.progress.read().0,
+            speed: a.speed,
         };
     }
     pub fn set_playing(&self, playing: bool) {
@@ -104,6 +107,13 @@ impl Clock {
             a.serial = self.progress.read().0;
             a.playing = playing;
         }
+    }
+    pub fn set_speed(&self, speed: f64) {
+        let mut a = self.anchor.lock().unwrap();
+        a.media = self.time(&a);
+        a.wall = self.wall();
+        a.serial = self.progress.read().0;
+        a.speed = speed;
     }
     pub fn use_wall_clock(&self) {
         let mut a = self.anchor.lock().unwrap();
@@ -119,6 +129,21 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn speed_applies_to_silent_video_and_audio_latency_without_moving_paused_time() {
+        let c = Clock::new();
+        c.reset(3, 12.0, true, false);
+        c.set_speed(2.0);
+        c.anchor.lock().unwrap().wall -= 1.0;
+        assert!((c.now() - 14.0).abs() < 0.05);
+        c.set_playing(false);
+        let paused = c.now();
+        c.set_speed(3.0);
+        assert_eq!(c.now(), paused);
+        c.reset(4, 12.0, true, true);
+        c.progress.publish(4, 16.0, c.wall() + 0.5);
+        assert!((c.now() - 14.5).abs() < 0.05);
+    }
     #[test]
     fn old_epoch_cannot_move_seek_clock() {
         let c = Clock::new();

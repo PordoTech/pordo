@@ -13,7 +13,7 @@ A media app for watching videos, listening to music and reading comics, with opt
 - **AI subtitles.** Generate Chinese or English subtitles while watching, optionally show both languages, and export the results as SRT.
 - **Comic translation.** Translate a page or chapter with a compatible image-editing service, then switch between the original, translation and side-by-side views.
 - **Online music.** Search supported music sources, choose a quality, and listen while downloading or save tracks for later.
-- **Bilibili videos on desktop.** Search videos and creators or paste a BV ID/link, sign in by scanning a QR code, and choose a part and available quality before watching.
+- **Bilibili videos on desktop.** Search videos and creators or paste a BV ID/link, sign in with a QR code, and watch with adjustable danmaku, playback speed, quality and parts.
 - **Magnet playback.** Choose a file from a magnet link and start watching or listening as it downloads.
 - **Sync between devices.** Use your own WebDAV storage for supported settings, favorites and progress, with optional encrypted API-key sync.
 - **Chinese and English desktop interfaces**, full-screen viewing and controls that stay out of the way.

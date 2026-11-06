@@ -13,6 +13,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
+pub mod danmaku;
 
 #[derive(Default)]
 struct PrivateJar(Jar);
@@ -177,6 +178,7 @@ pub struct Part {
 pub struct Detail {
     pub bvid: String,
     pub title: String,
+    pub cover: Option<String>,
     pub parts: Vec<Part>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -443,6 +445,10 @@ impl Bilibili {
         Ok(Detail {
             bvid: bvid.into(),
             title: text(data, "title"),
+            cover: data["pic"]
+                .as_str()
+                .and_then(image_url)
+                .map(|u| u.to_string()),
             parts,
         })
     }

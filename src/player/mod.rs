@@ -76,6 +76,7 @@ struct Shared {
     stop: Arc<AtomicBool>,
     output: Arc<OutputControl>,
     volume: Arc<AtomicU32>,
+    speed: AtomicU32,
     presented: AtomicU64,
 }
 // Audio callback shares Clock directly, not the control/state mutex.
@@ -140,6 +141,7 @@ impl Player {
             stop: Arc::new(AtomicBool::new(false)),
             output: Arc::new(OutputControl::new()),
             volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            speed: AtomicU32::new(1.0f32.to_bits()),
             presented: AtomicU64::new(0.0f64.to_bits()),
         });
         let worker = shared.clone();
@@ -197,6 +199,28 @@ impl Player {
         } else {
             time
         }
+    }
+    pub fn speed(&self) -> f32 {
+        f32::from_bits(self.shared.speed.load(Ordering::Acquire))
+    }
+    /// Re-prime at the current media position so queued PCM never mixes tempos.
+    pub fn set_speed(&self, speed: f32) -> Option<u64> {
+        if ![1.0, 1.25, 1.5, 2.0, 3.0].contains(&speed) || speed == self.speed() {
+            return None;
+        }
+        let target = {
+            let intent = self.shared.seek_intent.lock().unwrap();
+            let snapshot = self.snapshot();
+            if intent.0 > snapshot.epoch
+                || (snapshot.state == PlaybackState::Seeking && intent.0 == snapshot.epoch)
+            {
+                intent.1
+            } else {
+                self.position()
+            }
+        };
+        self.shared.speed.store(speed.to_bits(), Ordering::Release);
+        Some(self.seek(target))
     }
     pub fn sync_time(&self) -> f64 {
         self.shared.clock.now()

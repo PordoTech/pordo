@@ -21,6 +21,8 @@ pub(super) enum Page {
 #[derive(Default)]
 pub(super) struct State {
     pub page: Page,
+    pub settings_return: Option<Page>,
+    pub settings_draft_retained: bool,
     query: String,
     music_tab: usize,
     pub(super) video_tab: usize,
@@ -31,6 +33,9 @@ pub(super) struct State {
 
 impl App {
     pub(super) fn navigate(&mut self, page: Page) {
+        if page == Page::Settings && self.workspace.page != Page::Settings {
+            self.workspace.settings_return = Some(self.workspace.page);
+        }
         if page != self.workspace.page {
             self.online_video.cancel_discovery();
         }
@@ -46,9 +51,13 @@ impl App {
         {
             player.set_playing(false);
         }
-        if page == Page::Settings && !self.settings_open {
+        if page == Page::Settings && !self.settings_open && !self.workspace.settings_draft_retained
+        {
             self.preferences_draft = self.settings.clone();
             self.config_message.clear();
+        }
+        if self.workspace.page == Page::Settings && page != Page::Settings {
+            self.workspace.settings_draft_retained = self.preferences_draft != self.settings;
         }
         self.settings_open = page == Page::Settings;
         self.workspace.page = page;
@@ -80,7 +89,7 @@ impl App {
             } else if self.workspace.page == Page::Listening {
                 self.navigate(Page::Music);
             } else if self.workspace.page == Page::Settings {
-                self.navigate(Page::Home);
+                self.navigate(self.workspace.settings_return.unwrap_or(Page::Home));
             } else if self.queue_open {
                 self.queue_open = false;
             }
@@ -150,7 +159,7 @@ impl App {
                 Rect::from_min_size(
                     content.min + vec2(22.0, 8.0),
                     vec2(
-                        (content.width() - 56.0 - window::controls_width(&ctx)).max(180.0),
+                        (content.width() - 56.0 - window::playback_controls_width(&ctx)).max(180.0),
                         36.0,
                     ),
                 ),

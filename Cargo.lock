@@ -1396,7 +1396,7 @@ dependencies = [
  "bitflags 2.13.2",
  "emath",
  "epaint",
- "itertools",
+ "itertools 0.15.0",
  "log",
  "nohash-hasher",
  "profiling",
@@ -2356,6 +2356,15 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
@@ -2604,7 +2613,7 @@ dependencies = [
  "hex",
  "http",
  "intervaltree",
- "itertools",
+ "itertools 0.15.0",
  "librqbit-bencode",
  "librqbit-buffers",
  "librqbit-clone-to-owned",
@@ -2696,7 +2705,7 @@ dependencies = [
  "directories",
  "encoding_rs",
  "hex",
- "itertools",
+ "itertools 0.15.0",
  "librqbit-bencode",
  "librqbit-buffers",
  "librqbit-clone-to-owned",
@@ -2791,7 +2800,7 @@ dependencies = [
  "bitvec",
  "byteorder",
  "bytes",
- "itertools",
+ "itertools 0.15.0",
  "librqbit-bencode",
  "librqbit-buffers",
  "librqbit-clone-to-owned",
@@ -2823,7 +2832,7 @@ dependencies = [
  "backon",
  "byteorder",
  "futures",
- "itertools",
+ "itertools 0.15.0",
  "librqbit-bencode",
  "librqbit-buffers",
  "librqbit-core",
@@ -3948,7 +3957,7 @@ dependencies = [
 
 [[package]]
 name = "pordo"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -3986,11 +3995,12 @@ dependencies = [
  "wgpu",
  "windows-sys 0.61.2",
  "winresource",
+ "wsola",
 ]
 
 [[package]]
 name = "pordo-android"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "jni 0.21.1",
@@ -4006,7 +4016,7 @@ dependencies = [
 
 [[package]]
 name = "pordo-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -4016,6 +4026,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "md5",
+ "prost",
  "quick-xml 0.42.0",
  "regex",
  "remdia",
@@ -4096,6 +4107,29 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "prost"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "psl-types"
@@ -7047,6 +7081,15 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "wsola"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8149cd82a73bbde439d2b42a40a032de7dc28b1ec01919fcd0bd0456ecea75e6"
+dependencies = [
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "wyz"

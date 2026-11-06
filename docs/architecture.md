@@ -28,7 +28,20 @@ Windows uses software Media Foundation transforms. macOS uses synchronous VideoT
 
 Bilibili Web API, WBI signatures, QR login and UGC stream selection live in `pordo-core::video_sources::bilibili`. Desktop UI jobs are cancellable. Login sessions go directly to the OS vault and never enter settings JSON or cloud snapshots. Session cookies stay on Bilibili API requests; a separate cookie-free client fetches CDN media with the required Referer.
 
-A session-scoped loopback bridge streams Range responses without buffering a whole video. It uses service-provided HTTPS CDN backups and renews expired addresses without persisting them. Separate video/audio remdia sessions share a playback clock, cancellation and seek epoch. The demux worker retains at most one lookahead frame per input and merges by timestamp. API duration supplies the timeline when fragmented MP4 metadata has no duration. History stores only the public video URL and part number.
+A session-scoped loopback bridge streams Range responses without buffering a whole video. It uses service-provided HTTPS CDN backups and renews expired addresses without persisting them. Separate video/audio remdia sessions share a playback clock, cancellation and seek epoch. The demux worker retains at most one lookahead frame per input and merges by timestamp. API duration supplies the timeline when fragmented MP4 metadata has no duration. History stores the public video URL, part number and validated public cover URL.
+
+Video tempo uses a bounded streaming WSOLA processor before the audio device queue.
+Each output sample carries its media-time duration; the audio and wall-clock paths
+use the same speed. Changing tempo re-primes the current seek generation so stale
+PCM cannot play at the new rate. Normal-speed PCM bypasses time stretching.
+
+Bilibili danmaku loads six-minute Protobuf segments with the existing WBI client
+and account session. Decoding bounds both response bytes and item count. Desktop
+scheduling keeps at most three segments, two requests and 120 active comments.
+The egui overlay caches active text layouts, allocates collision-free tracks and
+computes positions from media time. Seeks and layout changes rebuild the visible
+window; pause and buffering freeze it. Comments are clipped to the picture, below
+subtitles and controls. Scripted and animated payloads are not interpreted.
 
 Online music uses a shared disk cache and a token-protected loopback HTTP bridge. Range-capable sources support prioritized reads for seeking; other sources may need sequential download. Complete files are published without overwriting an existing destination, so the download directory must support hard links. Provider API credentials are kept away from media/CDN requests.
 

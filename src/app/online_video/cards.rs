@@ -19,7 +19,7 @@ struct Entry {
     used: u64,
 }
 #[derive(Default)]
-pub(super) struct Previews {
+pub(in crate::app) struct Previews {
     entries: HashMap<String, Entry>,
     tick: u64,
 }
@@ -47,7 +47,7 @@ impl Previews {
             }
         }
     }
-    fn texture(
+    pub(in crate::app) fn texture(
         &mut self,
         ui: &Ui,
         rect: Rect,

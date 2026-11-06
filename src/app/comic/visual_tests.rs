@@ -1562,6 +1562,15 @@ fn provider_models_panel_opens_without_repeating_connection_forms() {
 }
 
 impl Capture {
+    pub(in crate::app) fn apply_textures(&mut self, output: &mut egui::FullOutput) {
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
+        }
+        output.textures_delta.clear();
+    }
     pub(in crate::app) fn new() -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

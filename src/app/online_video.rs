@@ -69,7 +69,7 @@ pub(super) struct State {
     requested_page: usize,
     resume: Option<f64>,
     keep_position: bool,
-    previews: cards::Previews,
+    pub(in crate::app) previews: cards::Previews,
 }
 impl State {
     pub(super) fn stop(&mut self) {
@@ -117,6 +117,21 @@ impl State {
     }
 }
 impl App {
+    pub(in crate::app) fn bilibili_danmaku_source(&self) -> Option<(Arc<Bilibili>, u64)> {
+        if !self.bilibili_controls_available() {
+            return None;
+        }
+        let active = self.online_video.active.as_ref()?;
+        Some((
+            self.online_video.api.clone()?,
+            active.detail.parts.get(active.part)?.cid,
+        ))
+    }
+    pub(in crate::app) fn bilibili_cover_url(&self) -> Option<String> {
+        self.bilibili_controls_available()
+            .then(|| self.online_video.active.as_ref()?.detail.cover.clone())
+            .flatten()
+    }
     fn favorite_creator_ids(&self) -> std::collections::HashSet<u64> {
         self.library
             .creators
@@ -436,6 +451,7 @@ impl App {
             state.poll_at = Some(Instant::now() + Duration::from_secs(2));
             match result {
                 Ok(LoginPoll::SignedIn(session, account)) => {
+                    self.danmaku = Default::default();
                     state.account = Some(account);
                     state.qr = None;
                     state.poll_at = None;

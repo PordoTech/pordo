@@ -9,6 +9,7 @@ fn search_never_shows_the_old_playback_setup_page_or_permission_hint() {
     app.online_video.detail = Some(Detail {
         bvid: "BV1GJ411x7h7".into(),
         title: "Old setup heading".into(),
+        cover: None,
         parts: vec![bilibili::Part {
             cid: 1,
             page: 1,
@@ -327,6 +328,7 @@ fn bilibili_visuals() {
         app.online_video.detail = Some(Detail {
             bvid: "BV1GJ411x7h7".into(),
             title: "Bilibili video · 视频详情".into(),
+            cover: None,
             parts: vec![bilibili::Part {
                 cid: 1,
                 page: 1,

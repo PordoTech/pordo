@@ -31,6 +31,13 @@ Use the queue sidebar to select, remove or reorder entries. Hold an item's title
 
 Video and comic toolbars appear when the pointer approaches the edges. Music controls stay visible.
 
+Music, video and comic playback pages have a settings button immediately before the
+window controls. Use **Back** in settings, or click the current media cover, to return
+without reopening the media. Unsaved settings remain available until saved or discarded.
+
+Video playback offers **1.0×**, **1.25×**, **1.5×**, **2.0×** and **3.0×** in the lower-right
+speed menu. Audio pitch is preserved; the remembered video speed does not change music playback.
+
 ### Online music
 
 Configure the music-source API key in **Settings → Music**. The ChKSz adapter exposes NetEase Cloud Music, QQ Music and Kugou search and playback; availability and quality depend on the upstream service.
@@ -72,6 +79,13 @@ Choose **Translate page** or **Translate chapter**. Original, translated and sid
 Translation is started explicitly. Cancelling stops local waiting, but an already accepted request may still be billed. Generated images can change artwork or mistranslate text; compare with the original.
 
 ## Bilibili videos (desktop)
+
+The lower-right danmaku button opens a panel with a visibility switch, quarter/half/full
+picture coverage, opacity, font size and scrolling speed. Changes apply immediately
+and are remembered. Ordinary scrolling and top/bottom comments follow playback,
+pauses, speed changes and seeking. Comments stay within the picture and leave room
+for subtitles and controls. Animated/scripted comments and posting are not supported.
+Some videos return fewer comments without signing in; a danmaku error does not stop playback.
 
 Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Selecting a video starts playback directly, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right quality and parts icons open selection menus; changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
 

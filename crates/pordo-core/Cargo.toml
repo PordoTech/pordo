@@ -2,7 +2,7 @@
 name = "pordo-core"
 # Keep in lockstep with the application version: comic/music source user agents
 # embed CARGO_PKG_VERSION and must stay identical across desktop and Android.
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 description = "Platform-neutral pordo logic: comic/music sources, library, caches, downloads, lyrics and remdia media jobs."
 license = "MIT"
@@ -22,6 +22,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 crossbeam-channel = "0.5.17"
 futures-util = "0.3"
 md5 = "0.8"
+prost = "0.14"
 regex = "1"
 # Same pinned SDK revision as the application; bundled registers the built-in
 # factories on every platform, including the Android framework pack.

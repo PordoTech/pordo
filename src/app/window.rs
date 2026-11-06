@@ -73,6 +73,10 @@ pub(super) fn controls_width(ctx: &egui::Context) -> f32 {
     if fullscreen(ctx) { 0.0 } else { CONTROLS_WIDTH }
 }
 
+pub(super) fn playback_controls_width(ctx: &egui::Context) -> f32 {
+    controls_width(ctx) + 44.0
+}
+
 pub(super) fn video_cursor(ctx: &egui::Context, may_hide: bool) {
     let (now, active) = ctx.input(|i| {
         (
@@ -210,15 +214,31 @@ impl App {
         let fullscreen = fullscreen(&ctx);
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let reader = self.workspace.page == workspace::Page::Comic && self.comic.reading();
+        let playback = reader
+            || matches!(
+                self.workspace.page,
+                workspace::Page::Playing | workspace::Page::Listening
+            );
         let caption_height = if reader { 48.0 } else { CAPTION_HEIGHT };
-        if show_controls && !fullscreen {
+        if show_controls && (!fullscreen || playback) {
             let mut draw_controls = |root: &mut Ui| {
+                if playback {
+                    let rect = Rect::from_center_size(
+                        pos2(
+                            screen.right() - controls_width(&ctx) - 22.0,
+                            screen.top() + caption_height * 0.5,
+                        ),
+                        Vec2::splat(26.0),
+                    );
+                    let mut settings = workspace::child(root, "caption-settings", rect);
+                    self.settings_button(&mut settings, 1.0);
+                }
                 let l = self.settings.language;
                 let controls = Rect::from_min_size(
                     pos2(screen.max.x - CONTROLS_WIDTH, screen.min.y),
                     vec2(CONTROLS_WIDTH, caption_height),
                 );
-                for index in 0..3 {
+                for index in 0..if fullscreen { 0 } else { 3 } {
                     let rect = Rect::from_min_size(
                         controls.min + vec2(index as f32 * 46.0, 0.0),
                         vec2(46.0, caption_height),
@@ -306,17 +326,20 @@ impl App {
             if reader {
                 egui::Area::new(Id::new("reader-window-controls"))
                     .order(egui::Order::Foreground)
-                    .fixed_pos(pos2(screen.max.x - CONTROLS_WIDTH, screen.min.y))
-                    .default_size(vec2(CONTROLS_WIDTH, caption_height))
+                    .fixed_pos(pos2(
+                        screen.max.x - playback_controls_width(&ctx),
+                        screen.min.y,
+                    ))
+                    .default_size(vec2(playback_controls_width(&ctx), caption_height))
                     .constrain(false)
                     .movable(false)
                     .sense(Sense::hover())
                     .show(&ctx, |ui| {
                         ui.set_clip_rect(Rect::from_min_size(
-                            pos2(screen.max.x - CONTROLS_WIDTH, screen.min.y),
-                            vec2(CONTROLS_WIDTH, caption_height),
+                            pos2(screen.max.x - playback_controls_width(&ctx), screen.min.y),
+                            vec2(playback_controls_width(&ctx), caption_height),
                         ));
-                        ui.set_min_size(vec2(CONTROLS_WIDTH, caption_height));
+                        ui.set_min_size(vec2(playback_controls_width(&ctx), caption_height));
                         draw_controls(ui);
                     });
             } else {

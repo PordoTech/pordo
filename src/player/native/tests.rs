@@ -11,6 +11,50 @@ fn fixture(name: &str) -> String {
     .to_string_lossy()
     .into_owned()
 }
+
+#[test]
+#[ignore = "requires native fixtures; validates media-clock speed, paused changes and split EOF"]
+fn native_media_tempo_keeps_split_video_audio_and_seek_in_sync() {
+    let mut p = Player::open_split(fixture("av.mp4"), Some(fixture("audio.wav")), None).unwrap();
+    p.set_volume(0.0);
+    until(&mut p, Duration::from_secs(10), |p, _| p.position() > 0.1);
+    for speed in [1.25, 1.5, 2.0, 3.0, 1.0] {
+        p.set_playing(false);
+        until(&mut p, Duration::from_secs(2), |p, _| {
+            p.snapshot().state == PlaybackState::Paused
+        });
+        p.seek(0.2);
+        p.set_speed(speed);
+        until(&mut p, Duration::from_secs(5), |p, _| {
+            p.snapshot().state == PlaybackState::Paused && (p.position() - 0.2).abs() < 0.05
+        });
+        let position = p.position();
+        std::thread::sleep(Duration::from_millis(80));
+        assert!((p.position() - position).abs() < 0.02);
+        assert_eq!(p.speed(), speed);
+        p.set_playing(true);
+        until(&mut p, Duration::from_secs(5), |p, _| p.position() > 0.25);
+        let start = Instant::now();
+        let position = p.position();
+        until(&mut p, Duration::from_secs(2), |_, _| {
+            start.elapsed() >= Duration::from_millis(250)
+        });
+        let measured = (p.position() - position) / start.elapsed().as_secs_f64();
+        assert!(
+            (measured - speed as f64).abs() < 0.3,
+            "{speed}: measured {measured}"
+        );
+    }
+    p.set_speed(3.0);
+    p.seek(p.duration() - 0.2);
+    until(&mut p, Duration::from_secs(6), |p, _| {
+        p.snapshot().state == PlaybackState::Ended
+    });
+    p.toggle_play();
+    until(&mut p, Duration::from_secs(6), |p, _| {
+        p.position() > 0.1 && p.position() < 1.5 && p.snapshot().state != PlaybackState::Ended
+    });
+}
 #[test]
 #[ignore = "requires staged remdia components, audio device and native fixtures"]
 fn native_media_separate_audio_video_share_seeks_pause_and_eof() {

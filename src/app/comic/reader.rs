@@ -274,7 +274,7 @@ impl State {
                 let caption = Rect::from_min_max(
                     pos2(screen.min.x + 16.0, header.min.y + pad_y),
                     pos2(
-                        screen.max.x - window::controls_width(ui.ctx()) - 16.0,
+                        screen.max.x - window::playback_controls_width(ui.ctx()) - 16.0,
                         header.max.y - pad_y,
                     ),
                 );

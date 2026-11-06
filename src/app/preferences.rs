@@ -10,6 +10,11 @@ impl App {
         let language = self.settings.language;
         let dirty_before = self.preferences_draft != self.settings;
         ui.horizontal(|ui| {
+            if let Some(page) = self.workspace.settings_return
+                && design::back_button(ui, language.text("返回", "Back")).clicked()
+            {
+                self.navigate(page);
+            }
             ui.heading(language.text("设置", "Settings"));
             if !matches!(
                 self.preferences_tab,
@@ -216,6 +221,16 @@ impl App {
         match result {
             Ok(()) => {
                 self.settings = self.preferences_draft.clone();
+                if !self.is_music()
+                    && let Some(player) = &self.player
+                {
+                    let position = self
+                        .pending_seek
+                        .map_or_else(|| player.position(), |(_, p)| p);
+                    if let Some(id) = player.set_speed(self.settings.video.speed as f32 / 100.0) {
+                        self.pending_seek = Some((id, position));
+                    }
+                }
                 self.online_music.clear_search();
                 self.comic.reload_images();
                 self.config_message = language.text("已保存", "Saved").into();

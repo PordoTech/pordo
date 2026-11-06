@@ -1,5 +1,13 @@
 # Bundled components
 
+Video playback tempo uses `wsola` 0.3.0 (MIT), a streaming Rust WSOLA processor;
+the notice is bundled in `licenses/wsola-MIT.txt`.
+Bilibili segmented danmaku uses `prost` 0.14.4 (Apache-2.0) to decode Protobuf;
+the notice is bundled in `licenses/prost-Apache-2.0.txt`. Protocol models are limited
+to ordinary text comments; no external danmaku rendering runtime is bundled.
+Sources: https://github.com/jhheider/pdcst/tree/d74c46c9457770372a4f4c9d61fe6de9202d84f6/crates/wsola
+and https://github.com/tokio-rs/prost .
+
 Bilibili WBI request signing uses `md5` 0.8.1 (MIT OR Apache-2.0); this protocol digest is not used for credential protection. QR symbols are generated locally with `qrcodegen` 1.8.0 (MIT). Their notices are bundled in `licenses/md5-LICENSE.md` and `licenses/qrcodegen-MIT.txt`.
 Sources: https://github.com/stainless-steel/md5 and https://www.nayuki.io/page/qr-code-generator-library .
 

@@ -1,6 +1,6 @@
 [package]
 name = "pordo"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 
 [workspace]
@@ -10,7 +10,7 @@ members = ["crates/pordo-core", "crates/pordo-android"]
 default-members = [".", "crates/pordo-core"]
 
 [dependencies]
-pordo-core = { path = "crates/pordo-core", version = "0.6.1" }
+pordo-core = { path = "crates/pordo-core", version = "0.6.2" }
 anyhow = "1"
 # Share the crypto implementation already used by rustls and librqbit.
 aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
@@ -42,6 +42,7 @@ axum = "0.8"
 tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
 qrcodegen = "1.8"
+wsola = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tc_tea = { version = "0.2.1", default-features = false }
@@ -74,6 +75,9 @@ strip = "symbols"
 
 # Pixel conversion is hot even when the rest of the UI is built for debugging.
 [profile.dev.package.epaint]
+opt-level = 3
+
+[profile.dev.package.wsola]
 opt-level = 3
 
 [profile.dev.package.ecolor]

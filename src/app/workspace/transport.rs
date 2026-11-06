@@ -19,21 +19,32 @@ impl App {
         if self.player.is_some() {
             design::card_hover(root, &response, 7);
         }
-        if let Some(art) = &self.artwork {
-            design::cover(root, art, cover.shrink(3.0), 5);
+        let cover_url = self.bilibili_cover_url();
+        let art = self.artwork.clone().or_else(|| {
+            self.online_video
+                .previews
+                .texture(root, cover, cover_url.as_deref(), false)
+        });
+        if let Some(art) = art {
+            design::cover(root, &art, cover.shrink(3.0), 5);
         } else {
-            draw_music(root.painter(), cover.shrink(19.0), MUTED);
+            if self.is_music() {
+                draw_music(root.painter(), cover.shrink(19.0), MUTED);
+            } else {
+                draw_video(root.painter(), cover.shrink(19.0), MUTED);
+            }
         }
         if response
             .on_hover_text(l.text("展开播放页", "Now playing"))
             .clicked()
             && self.player.is_some()
         {
-            self.workspace.page = if self.is_music() {
+            let page = if self.is_music() {
                 Page::Listening
             } else {
                 Page::Playing
             };
+            self.navigate(page);
         }
         let artist = self
             .media_info
@@ -228,7 +239,7 @@ impl App {
     ) {
         let l = self.settings.language;
         let bar = Rect::from_min_max(pos2(screen.min.x, screen.max.y - BAR_BOTTOM), screen.max);
-        let cy = bar.min.y + 40.0;
+        let cy = bar.min.y + 42.0;
         root.painter()
             .rect_filled(bar, 0, SURFACE.gamma_multiply(alpha * 0.96));
         root.painter().line_segment(
@@ -240,31 +251,18 @@ impl App {
             .as_ref()
             .map(|p| (p.position(), p.duration(), p.is_playing()))
             .unwrap_or_default();
-        for (index, offset, size) in [(0, 42.0, 36.0), (1, 93.0, 38.0), (2, 144.0, 36.0)] {
-            let mut ui = control_slot(
-                root,
-                &format!("video-control-{index}"),
-                pos2(bar.min.x + offset, cy),
-                size,
-            );
-            let response = icon_button(&mut ui, size, alpha, |p, r, c| match index {
-                0 => draw_seek_ten(p, r, c, false),
-                1 if playing => draw_pause(p, r, c),
-                1 => draw_play(p, r, c),
-                _ => draw_seek_ten(p, r, c, true),
-            });
-            let label = match index {
-                0 => l.text("后退 10 秒", "Back 10 seconds"),
-                1 => l.text("播放 / 暂停", "Play / pause"),
-                _ => l.text("前进 10 秒", "Forward 10 seconds"),
-            };
-            if response.on_hover_text(label).clicked() {
-                *act = match index {
-                    0 => Act::Seek((pos - 10.0).max(0.0)),
-                    1 => Act::TogglePlay,
-                    _ => Act::Seek((pos + 10.0).min(dur)),
-                };
+        let mut play = control_slot(root, "video-play", pos2(bar.min.x + 42.0, cy), 38.0);
+        if icon_button(&mut play, 38.0, alpha, |p, r, c| {
+            if playing {
+                draw_pause(p, r, c);
+            } else {
+                draw_play(p, r, c);
             }
+        })
+        .on_hover_text(l.text("播放 / 暂停", "Play / pause"))
+        .clicked()
+        {
+            *act = Act::TogglePlay;
         }
         let time = format!(
             "{} / {}",
@@ -272,7 +270,7 @@ impl App {
             fmt_time(dur)
         );
         root.painter().text(
-            pos2(bar.min.x + 178.0, cy),
+            pos2(bar.min.x + 76.0, cy),
             egui::Align2::LEFT_CENTER,
             time,
             egui::FontId::proportional(12.0),
@@ -309,18 +307,22 @@ impl App {
                 x -= 36.0;
             }
         }
-        let mut settings = control_slot(root, "video-settings", pos2(x - 13.0, cy), 26.0);
-        self.settings_button(&mut settings, alpha);
-        x -= 36.0;
+        if self.bilibili_controls_available() {
+            let mut danmaku = control_slot(root, "video-danmaku", pos2(x - 14.0, cy), 28.0);
+            self.danmaku_button(&mut danmaku, alpha);
+            x -= 38.0;
+        }
+        let mut speed = control_slot(root, "video-speed", pos2(x - 20.0, cy), 40.0);
+        self.video_speed_button(&mut speed, alpha);
+        x -= 52.0;
         let mut captions = control_slot(root, "video-subtitles", pos2(x - 14.0, cy), 28.0);
         self.subtitle_menu(&mut captions, alpha, act);
         x -= 38.0;
         self.volume_control(root, screen, pos2(x - 14.0, cy), alpha, act);
-        x -= 38.0;
-        let seek_rect = Rect::from_min_max(
-            pos2(bar.min.x + 290.0, cy - 12.0),
-            pos2(x - 10.0, cy + 12.0),
-        );
+        // Center the buttons between the rail's lower edge and the bar's bottom.
+        let seek_y = 2.0 * cy - bar.bottom() - 1.5;
+        let seek_rect =
+            Rect::from_center_size(pos2(bar.center().x, seek_y), vec2(bar.width() - 48.0, 12.0));
         let mut seek = child(root, "video-seek", seek_rect);
         self.seek_control(&mut seek, seek_rect.width().max(30.0), dur, pos, alpha, act);
     }
@@ -338,7 +340,7 @@ impl App {
         let (rect, response) = hslider(
             ui,
             width,
-            24.0,
+            ui.available_height().clamp(12.0, 24.0),
             (shown / duration.max(0.001)).clamp(0.0, 1.0) as f32,
             3.0,
             true,

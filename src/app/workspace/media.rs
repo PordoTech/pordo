@@ -123,6 +123,11 @@ impl App {
                 .clone()
         });
         ui.painter().rect_filled(rect, 10, SURFACE);
+        let texture = texture.or_else(|| {
+            self.online_video
+                .previews
+                .texture(ui, rect, record.video_cover.as_deref(), false)
+        });
         if let Some(texture) = texture {
             design::cover(ui, &texture, rect, 10);
         } else {

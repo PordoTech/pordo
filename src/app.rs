@@ -18,6 +18,7 @@ mod about;
 mod branding;
 mod cloud;
 mod comic;
+mod danmaku;
 mod design;
 mod icons;
 mod library;
@@ -36,7 +37,7 @@ mod window;
 mod workspace;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 
-const BAR_BOTTOM: f32 = 92.0;
+const BAR_BOTTOM: f32 = 64.0;
 const BAR_TOP: f32 = window::CAPTION_HEIGHT;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
 type MetadataResult = (String, Option<Arc<crate::media::Info>>);
@@ -85,6 +86,8 @@ pub struct App {
     cloud: cloud::State,
     online_music: online_music::State,
     online_video: online_video::State,
+    danmaku: danmaku::State,
+    video_controls_dirty: bool,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
     queue_kind_music: bool,
@@ -194,6 +197,8 @@ impl App {
             cloud: Default::default(),
             online_music: online_music::State::new(&settings.music),
             online_video: Default::default(),
+            danmaku: Default::default(),
+            video_controls_dirty: false,
             queue: Default::default(),
             queue_inactive: Default::default(),
             queue_kind_music: true,
@@ -316,9 +321,7 @@ impl App {
             }
         });
         if settings.on_hover_text(label).clicked() {
-            self.settings_open = true;
-            self.preferences_draft = self.settings.clone();
-            self.config_message.clear();
+            self.navigate(workspace::Page::Settings);
         }
     }
     fn volume_popup(&mut self, root: &mut Ui, screen: Rect, volume_rect: Rect, act: &mut Act) {
@@ -514,6 +517,8 @@ impl eframe::App for App {
         self.comic.poll(ctx, &self.settings);
         self.poll_online_music(ctx);
         self.poll_online_video(ctx);
+        self.poll_danmaku(ctx);
+        self.flush_video_controls(ctx);
         self.poll_lyrics(ctx);
         let mut advance = false;
         let mut online_failure = None;
@@ -586,6 +591,17 @@ impl eframe::App for App {
                             && let Some(player) = &self.player
                         {
                             self.pending_seek = Some((player.seek(position), position));
+                        }
+                        if !self.is_music()
+                            && let Some(player) = &self.player
+                        {
+                            let speed = self.settings.video.speed as f32 / 100.0;
+                            if let Some(id) = player.set_speed(speed) {
+                                let position = self
+                                    .pending_seek
+                                    .map_or_else(|| player.position(), |(_, p)| p);
+                                self.pending_seek = Some((id, position));
+                            }
                         }
                     }
                     Event::Ended => advance = true,
@@ -906,6 +922,7 @@ impl eframe::App for App {
             );
         }
 
+        self.paint_danmaku(&painter, video_rect, screen, pos);
         // Subtitles remain visible when the toolbars are hidden and follow seeks.
         if !music
             && self.subtitles_visible
@@ -963,6 +980,7 @@ impl eframe::App for App {
             && !self.magnet_open
             && !self.online_music.open
             && !ctx.egui_wants_keyboard_input()
+            && !egui::Popup::is_any_open(&ctx)
         {
             if ctx.input(|i| i.key_pressed(Key::Space)) {
                 act = Act::TogglePlay;
@@ -1650,37 +1668,6 @@ fn draw_shuffle(p: &Painter, r: Rect, c: Color32) {
             s,
         ));
     }
-}
-
-fn draw_seek_ten(p: &Painter, r: Rect, c: Color32, forward: bool) {
-    let center = r.center() + vec2(0.0, r.height() * 0.08);
-    let radius = r.width() * 0.46;
-    let point = |angle: f32| {
-        let x = angle.cos() * radius * if forward { -1.0 } else { 1.0 };
-        center + vec2(x, angle.sin() * radius)
-    };
-    let start = -std::f32::consts::FRAC_PI_2;
-    let points = (0..=36)
-        .map(|i| point(start + i as f32 / 36.0 * 5.35))
-        .collect();
-    p.add(Shape::line(points, Stroke::new(1.5, c)));
-    let tip = point(start);
-    let sign = if forward { -1.0 } else { 1.0 };
-    p.add(Shape::line(
-        vec![
-            tip + vec2(4.0 * sign, -3.0),
-            tip,
-            tip + vec2(4.0 * sign, 3.0),
-        ],
-        Stroke::new(1.5, c),
-    ));
-    p.text(
-        center,
-        egui::Align2::CENTER_CENTER,
-        "10",
-        egui::FontId::proportional(r.height() * 0.44),
-        c,
-    );
 }
 
 fn draw_repeat(p: &Painter, r: Rect, c: Color32, single: bool) {

@@ -111,9 +111,12 @@ pub(super) fn run(
             next_video_pts = position;
             while stale.try_recv().is_ok() {}
             if let Some(a) = &mut audio {
+                a.set_speed(f32::from_bits(s.speed.load(Ordering::Acquire)));
                 a.reset(position);
             }
             s.output.enabled.store(false, Ordering::Release);
+            s.clock
+                .set_speed(f32::from_bits(s.speed.load(Ordering::Acquire)) as f64);
             s.clock.reset(epoch, target, false, audio.is_some());
             s.presented.store((-1f64).to_bits(), Ordering::Release);
             demux
@@ -186,6 +189,9 @@ pub(super) fn run(
                     ));
                 }
             }
+        }
+        if eof && let Some(a) = &mut audio {
+            a.finish(epoch)?;
         }
         if !audio_fallback && let (Some(a), Some(out)) = (&mut audio, &mut output) {
             a.pump(out);
@@ -274,6 +280,9 @@ pub(super) fn run(
         }
         if !audio_fallback && let (Some(a), Some(out)) = (&mut audio, &mut output) {
             a.pump(out);
+        }
+        if eof && let Some(a) = &mut audio {
+            a.finish(epoch)?;
         }
         let now = s.clock.now();
         while video.len() > 1 && video.front().is_some_and(|f| f.pts + 0.1 < now) {

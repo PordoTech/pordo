@@ -15,6 +15,7 @@ pub(super) struct Record {
     pub favorite: bool,
     pub favorited_at: u64,
     pub online: Option<crate::music_sources::OnlineSong>,
+    pub video_cover: Option<String>,
 }
 impl Record {
     pub fn resume_at(&self) -> Option<f64> {
@@ -159,11 +160,15 @@ impl Library {
             let favorite = old.favorite;
             let favorited_at = old.favorited_at;
             let online = old.online.clone();
+            let video_cover = old.video_cover.clone();
             *old = record;
             old.favorite = favorite;
             old.favorited_at = favorited_at;
             if old.online.is_none() {
                 old.online = online;
+            }
+            if old.video_cover.is_none() {
+                old.video_cover = video_cover;
             }
         } else {
             self.records.push(record);
@@ -382,7 +387,14 @@ impl App {
             .pending_seek
             .map_or_else(|| player.position(), |(_, t)| t);
         let previous = self.library.records.iter().find(|r| r.path == path);
-        if previous.is_some_and(|r| (r.position - position).abs() < 1.0 && r.title == self.title) {
+        let video_cover = self
+            .bilibili_cover_url()
+            .or_else(|| previous.and_then(|r| r.video_cover.clone()));
+        if previous.is_some_and(|r| {
+            (r.position - position).abs() < 1.0
+                && r.title == self.title
+                && r.video_cover == video_cover
+        }) {
             return;
         }
         let info = self.media_info.as_ref();
@@ -404,6 +416,7 @@ impl App {
                 .online_origin
                 .clone()
                 .or_else(|| previous.and_then(|r| r.online.clone())),
+            video_cover,
         });
     }
 }

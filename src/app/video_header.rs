@@ -6,7 +6,7 @@ impl App {
         root.painter()
             .rect_filled(bar, 0, Color32::from_black_alpha((alpha * 200.0) as u8));
         let center = bar.center().y;
-        let end = bar.right() - window::controls_width(root.ctx()) - 12.0;
+        let end = bar.right() - window::playback_controls_width(root.ctx()) - 12.0;
         let back_rect = Rect::from_center_size(pos2(bar.left() + 32.0, center), Vec2::splat(32.0));
         let mut back = workspace::child(root, "video-back", back_rect);
         if design::icon_button_sized(

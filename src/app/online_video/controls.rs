@@ -140,6 +140,7 @@ mod tests {
             detail: Detail {
                 bvid: "BV1GJ411x7h7".into(),
                 title: "Current video".into(),
+                cover: None,
                 parts: vec![
                     bilibili::Part {
                         cid: 1,
@@ -319,5 +320,145 @@ mod tests {
         assert!(state.resolve.is_none());
         assert!(state.prepare.is_none());
         assert!(!state.auto_play);
+    }
+
+    #[test]
+    fn speed_and_danmaku_menus_replace_the_old_bottom_settings_button() {
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        app.settings.language = Language::English;
+        app.online_video.active = Some(active());
+        app.source = Some(active().media_path);
+        app.mode = UiMode::Video;
+        let mut output = frame(&ctx, &mut app, vec![]);
+        let speed = text_point(&output, "1.0×").expect("speed entry");
+        assert!(text_point(&output, icons::CHAT_CENTERED_TEXT).is_some());
+        assert!(text_point(&output, icons::GEAR_SIX).is_none());
+        output = click(&ctx, &mut app, speed);
+        for _ in 0..12 {
+            output = frame(&ctx, &mut app, vec![]);
+        }
+        for label in ["1.25×", "1.5×", "2.0×", "3.0×"] {
+            assert!(text_point(&output, label).is_some(), "{label}");
+        }
+        egui::Popup::close_all(&ctx);
+        output = frame(&ctx, &mut app, vec![]);
+        let danmaku = text_point(&output, icons::CHAT_CENTERED_TEXT).unwrap();
+        output = click(&ctx, &mut app, danmaku);
+        for _ in 0..12 {
+            output = frame(&ctx, &mut app, vec![]);
+        }
+        for label in ["Display area", "Opacity", "Font size", "Speed"] {
+            assert!(text_point(&output, label).is_some(), "{label}");
+        }
+        let area_label = text_point(&output, "Display area").unwrap();
+        let speed_label = text_point(&output, "Speed").unwrap();
+        // Move the area's slider to its upper end, then move speed to its lower end.
+        let area_end = pos2(area_label.x + 176.0, area_label.y);
+        click(&ctx, &mut app, area_end);
+        assert!(app.settings.video.danmaku.area >= 90);
+        assert_eq!(app.settings.video.danmaku.speed, 100);
+        let speed_start = pos2(speed_label.x + 63.0, speed_label.y);
+        let output = click(&ctx, &mut app, speed_start);
+        assert!(app.settings.video.danmaku.speed < 80);
+        assert!(app.settings.video.danmaku.area >= 90);
+        assert!(
+            text_point(&output, "Opacity").is_some(),
+            "configuration stays open"
+        );
+        assert!(!output.shapes.iter().any(
+            |s| matches!(&s.shape, Shape::Text(t) if t.galley.text().contains("use of widget ID"))
+        ));
+        assert!(!app.settings_open);
+    }
+
+    #[test]
+    #[ignore = "requires GPU; captures actual player controls and danmaku using sample comments"]
+    fn playback_danmaku_visuals() {
+        fn draw(app: &mut App, ui: &mut Ui, width: u32) {
+            let screen = ui.max_rect();
+            let painter = ui.painter();
+            painter.rect_filled(screen, 0, Color32::from_rgb(50, 68, 72));
+            painter.rect_filled(
+                Rect::from_min_max(pos2(screen.left(), screen.center().y), screen.max),
+                0,
+                Color32::from_rgb(35, 57, 56),
+            );
+            painter.add(Shape::convex_polygon(
+                vec![
+                    pos2(0.0, 450.0),
+                    pos2(width as f32 * 0.30, 220.0),
+                    pos2(width as f32 * 0.70, 450.0),
+                ],
+                Color32::from_rgb(41, 54, 52),
+                Stroke::NONE,
+            ));
+            app.paint_danmaku(&ui.painter().clone(), screen, screen, 30.0);
+            app.video_header(ui, screen, 1.0, &mut Act::None);
+            app.video_transport(ui, screen, 1.0, &mut Act::None);
+            app.window_frame(ui, true);
+        }
+        let directory = std::path::Path::new("target/ui-review/playback");
+        std::fs::create_dir_all(directory).unwrap();
+        let mut capture = comic::visual_tests::Capture::new();
+        for (language, suffix) in [(Language::Chinese, "zh"), (Language::English, "en")] {
+            for width in [760, 1280] {
+                let ctx = egui::Context::default();
+                let mut app = comic::visual_tests::settings_fixture(&ctx);
+                app.settings.language = language;
+                app.workspace.page = workspace::Page::Playing;
+                app.mode = UiMode::Video;
+                app.online_video.active = Some(active());
+                app.source = Some(active().media_path);
+                app.title = language
+                    .text("沿着山路，去看远方的海", "A road to the distant sea")
+                    .into();
+                app.danmaku.seed_fixture();
+                let mut point = None;
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(width as f32, 700.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| draw(&mut app, ui, width),
+                    );
+                    point = text_point(&output, icons::CHAT_CENTERED_TEXT);
+                    capture.apply_textures(&mut output);
+                }
+                let point = point.unwrap();
+                for pressed in [true, false] {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(width as f32, 700.0),
+                            )),
+                            events: vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                            ..Default::default()
+                        },
+                        |ui| draw(&mut app, ui, width),
+                    );
+                    capture.apply_textures(&mut output);
+                }
+                capture.save(
+                    &ctx,
+                    [width, 700],
+                    &directory.join(format!("danmaku-{suffix}-{width}.png")),
+                    |ui| draw(&mut app, ui, width),
+                );
+            }
+        }
     }
 }

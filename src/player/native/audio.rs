@@ -16,6 +16,7 @@ pub struct Sample {
     pub epoch: u64,
     pub pts: f64,
     pub pcm: [f32; 2],
+    pub duration: f64,
 }
 
 /// Control is read only by the callback. A generation change invalidates queued audio.
@@ -104,7 +105,7 @@ pub fn open_output(
                                 };
                                 *v = value.mul_add(gain, 0.0).clamp(-1.0, 1.0).to_sample::<$ty>();
                             }
-                            last = Some((s.pts + 1.0 / rate as f64, i + 1));
+                            last = Some((s.pts + s.duration, i + 1));
                             produced += 1;
                         } else {
                             dst.fill(<$ty as cpal::Sample>::EQUILIBRIUM);
@@ -189,7 +190,7 @@ pub fn open_output(
                     assert!(sample.pcm.iter().all(|v| v.is_finite()));
                     clock
                         .progress
-                        .publish(epoch, sample.pts + 1.0 / rate as f64, clock.wall());
+                        .publish(epoch, sample.pts + sample.duration, clock.wall());
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -217,6 +218,12 @@ pub struct AudioPipeline {
     rate: u32,
     queued_until: f64,
     discard_before: f64,
+    speed: f64,
+    stretch: Option<wsola::TimeStretch>,
+    stretch_buffer: Vec<f32>,
+    stretch_position: f64,
+    input_end: Option<f64>,
+    finished: bool,
 }
 impl AudioPipeline {
     pub fn new(rate: u32) -> Self {
@@ -227,6 +234,12 @@ impl AudioPipeline {
             rate,
             queued_until: 0.,
             discard_before: 0.,
+            speed: 1.0,
+            stretch: None,
+            stretch_buffer: Vec::new(),
+            stretch_position: 0.0,
+            input_end: None,
+            finished: false,
         }
     }
     pub fn reset(&mut self, target: f64) {
@@ -235,6 +248,24 @@ impl AudioPipeline {
         self.submitted_end = None;
         self.queued_until = target;
         self.discard_before = target;
+        self.stretch_position = target;
+        self.input_end = None;
+        self.finished = false;
+        if let Some(stretch) = &mut self.stretch {
+            stretch.reset();
+        }
+    }
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed as f64;
+        self.stretch = (speed != 1.0).then(|| {
+            let mut stretch =
+                wsola::TimeStretch::new(self.rate.try_into().unwrap(), 2.try_into().unwrap())
+                    .expect("valid PCM format");
+            stretch.set_tempo(speed);
+            self.stretch_buffer
+                .resize(stretch.min_output_buff_size() * 8, 0.0);
+            stretch
+        });
     }
     pub fn append(&mut self, frame: &remdia::Frame, epoch: u64, target: f64) -> Result<()> {
         let remdia::FrameInfo::Audio {
@@ -257,6 +288,37 @@ impl AudioPipeline {
             self.pending.len() + samples <= self.rate as usize * 2,
             "decoded audio exceeded two-second pending budget"
         );
+        if samples <= skip {
+            return Ok(());
+        }
+        let start = pts + skip as f64 / rate as f64;
+        let end = pts + samples as f64 / rate as f64;
+        if self.stretch.is_some() {
+            if self
+                .input_end
+                .is_some_and(|last| (last - start).abs() > 1.5 / rate as f64)
+            {
+                self.finish(epoch)?;
+                self.stretch.as_mut().unwrap().reset();
+                self.finished = false;
+                self.input_end = None;
+            }
+            if self.input_end.is_none() {
+                self.stretch_position = start;
+            }
+            let pcm: Vec<f32> = frame
+                .bytes()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .skip(skip * 2)
+                .map(|v| f32::from_le_bytes(*v))
+                .collect();
+            self.stretch.as_mut().unwrap().push(&pcm);
+            self.input_end = Some(end);
+            self.end = end;
+            return self.pull_stretched(epoch);
+        }
         for (i, pair) in frame
             .bytes()
             .as_chunks::<8>()
@@ -271,6 +333,7 @@ impl AudioPipeline {
                 epoch,
                 pts: pts + i as f64 / rate as f64,
                 pcm: [left, right],
+                duration: 1.0 / rate as f64,
             });
         }
         if samples > skip {
@@ -278,21 +341,80 @@ impl AudioPipeline {
         }
         Ok(())
     }
+    fn pull_stretched(&mut self, epoch: u64) -> Result<()> {
+        let Some(stretch) = &mut self.stretch else {
+            return Ok(());
+        };
+        loop {
+            let count = match stretch.pull(&mut self.stretch_buffer) {
+                Ok(n) => n,
+                Err(wsola::Error::NotEnoughInput) => break,
+                Err(e) => return Err(e.into()),
+            };
+            if count == 0 {
+                break;
+            }
+            for pair in self.stretch_buffer[..count].as_chunks::<2>().0 {
+                if self.stretch_position >= self.end {
+                    break;
+                }
+                let duration =
+                    (self.speed / self.rate as f64).min(self.end - self.stretch_position);
+                self.pending.push_back(Sample {
+                    epoch,
+                    pts: self.stretch_position,
+                    pcm: [pair[0], pair[1]],
+                    duration,
+                });
+                self.stretch_position += duration;
+            }
+        }
+        anyhow::ensure!(
+            self.pending.len() <= self.rate as usize * 2,
+            "stretched audio exceeded pending budget"
+        );
+        Ok(())
+    }
+    pub fn finish(&mut self, epoch: u64) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        if let Some(stretch) = &mut self.stretch {
+            stretch.set_draining();
+            self.pull_stretched(epoch)?;
+            // WSOLA works in complete windows. Complete the sub-window tail so
+            // the audio clock reaches the exact source endpoint, including EOF.
+            while self.input_end.is_some() && self.stretch_position + 1e-9 < self.end {
+                let duration =
+                    (self.speed / self.rate as f64).min(self.end - self.stretch_position);
+                self.pending.push_back(Sample {
+                    epoch,
+                    pts: self.stretch_position,
+                    pcm: [0.0; 2],
+                    duration,
+                });
+                self.stretch_position += duration;
+            }
+        }
+        self.finished = true;
+        Ok(())
+    }
     pub fn pump(&mut self, out: &mut AudioOut) {
         for _ in 0..out.producer.slots() {
             let Some(next) = self.pending.front() else {
                 break;
             };
-            let sample = if next.pts > self.queued_until + 1.5 / self.rate as f64 {
+            let sample = if next.pts > self.queued_until + 1.5 * self.speed / self.rate as f64 {
                 Sample {
                     epoch: next.epoch,
                     pts: self.queued_until,
                     pcm: [0.; 2],
+                    duration: (self.speed / self.rate as f64).min(next.pts - self.queued_until),
                 }
             } else {
                 self.pending.pop_front().unwrap()
             };
-            self.queued_until = sample.pts + 1. / self.rate as f64;
+            self.queued_until = sample.pts + sample.duration;
             let result = out.producer.push(sample);
             debug_assert!(result.is_ok());
             self.submitted_end = Some(self.queued_until);
@@ -303,6 +425,63 @@ impl AudioPipeline {
         self.queued_until = position;
         while self.pending.front().is_some_and(|s| s.pts < position) {
             self.pending.pop_front();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tempo_preserves_pitch_maps_media_time_and_flushes_tail_at_every_speed() {
+        let rate = 16000;
+        let frames = rate * 2 + 137; // Deliberately not a WSOLA window multiple.
+        let input: Vec<_> = (0..frames)
+            .flat_map(|i| {
+                let sample = (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5;
+                [sample, sample]
+            })
+            .collect();
+        for speed in [1.25, 1.5, 2.0, 3.0] {
+            let mut pipeline = AudioPipeline::new(rate);
+            pipeline.set_speed(speed);
+            pipeline.reset(12.0);
+            for chunk in input.chunks(1024) {
+                pipeline.stretch.as_mut().unwrap().push(chunk);
+                pipeline.end += chunk.len() as f64 / 2.0 / rate as f64;
+                pipeline.input_end = Some(pipeline.end);
+                pipeline.pull_stretched(7).unwrap();
+            }
+            pipeline.finish(7).unwrap();
+            let expected = (frames as f64 / speed as f64).ceil() as usize;
+            assert!(
+                pipeline.pending.len().abs_diff(expected) <= 1,
+                "{speed}: {} vs {expected}",
+                pipeline.pending.len()
+            );
+            let samples: Vec<_> = pipeline.pending.iter().collect();
+            assert!(
+                samples
+                    .iter()
+                    .all(|s| s.epoch == 7 && s.pcm[0].is_finite() && s.pcm[0] == s.pcm[1])
+            );
+            assert!(
+                (samples.last().unwrap().pts + samples.last().unwrap().duration - pipeline.end)
+                    .abs()
+                    < 1e-8
+            );
+            let center = &samples[rate as usize / 10..samples.len() - rate as usize / 10];
+            let crossings = center
+                .windows(2)
+                .filter(|s| s[0].pcm[0] <= 0.0 && s[1].pcm[0] > 0.0)
+                .count();
+            let hz = crossings as f64 / (center.len() as f64 / rate as f64);
+            assert!((hz - 440.0).abs() < 8.0, "{speed}: pitch {hz}");
+            pipeline.reset(30.0);
+            assert!(pipeline.pending.is_empty());
+            assert_eq!(pipeline.stretch.as_ref().unwrap().buffered(), 0);
+            assert_eq!(pipeline.stretch_position, 30.0);
         }
     }
 }
