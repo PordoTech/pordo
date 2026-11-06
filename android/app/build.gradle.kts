@@ -51,8 +51,8 @@ android {
         applicationId = "dev.replayer"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.6.0"
+        versionCode = 4
+        versionName = "0.6.1"
         ndk { abiFilters += listOf("arm64-v8a") }
         testInstrumentationRunner = "dev.pordo.ProxyTestRunner"
     }

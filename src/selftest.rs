@@ -158,6 +158,113 @@ pub fn bilibili(id: String) -> Result<()> {
         open_start,
     )
 }
+pub fn profile_bilibili(id: String) -> Result<()> {
+    use crate::{
+        bilibili::{Bilibili, start},
+        credentials::{SystemVault, Vault},
+    };
+    let (source, quality) = crate::jobs::block_on(async move {
+        let saved = SystemVault.get(&crate::settings::Settings::bilibili_target())?;
+        let session = saved
+            .as_deref()
+            .map(serde_json::from_str::<crate::bilibili::Session>)
+            .transpose()?;
+        let api = std::sync::Arc::new(Bilibili::new(session.as_ref())?);
+        let id = crate::bilibili::video_id(&id).context("provide a BV ID")?;
+        let detail = api.detail(&id).await?;
+        let playback = api
+            .resolve(&id, detail.parts[0].cid, crate::bilibili::DEFAULT_QUALITY)
+            .await?;
+        let quality = playback.quality;
+        Ok::<_, anyhow::Error>((start(api, playback).await?, quality))
+    })?;
+    let player = Player::open_split(
+        source.video.clone(),
+        source.audio.clone(),
+        Some(source.duration),
+    )?;
+    println!("profile source quality={quality}");
+    profile_player(player)
+}
+pub fn profile_media(path: String) -> Result<()> {
+    profile_player(Player::open(path)?)
+}
+fn profile_player(mut player: Player) -> Result<()> {
+    player.set_volume(0.0);
+    let start = Instant::now();
+    let mut began = None;
+    let mut last_frame = None;
+    let mut frames = 0;
+    let mut gaps = 0;
+    let mut buffering = 0;
+    let mut state = PlaybackState::Opening;
+    let mut first_pts = None;
+    let mut last_pts = 0.0;
+    let mut last_clock = 0.0f64;
+    let mut max_clock_step = 0.0f64;
+    let mut max_clock_error = 0.0f64;
+    let mut clock_wall = Instant::now();
+    while start.elapsed() < Duration::from_secs(50) {
+        while let Some(event) = player.poll_event() {
+            if let Event::Error(error) = event {
+                bail!(error);
+            }
+        }
+        let current = player.snapshot().state;
+        if current == PlaybackState::Buffering && state != current {
+            buffering += 1;
+        }
+        state = current;
+        let clock = player.sync_time();
+        max_clock_step = max_clock_step.max(clock - last_clock);
+        max_clock_error =
+            max_clock_error.max((clock - last_clock - clock_wall.elapsed().as_secs_f64()).abs());
+        last_clock = clock;
+        clock_wall = Instant::now();
+        if let Some(frame) = player.next_frame(clock) {
+            let now = Instant::now();
+            began.get_or_insert(now);
+            first_pts.get_or_insert(frame.pts);
+            last_pts = frame.pts;
+            if last_frame
+                .is_some_and(|last: Instant| now.duration_since(last) > Duration::from_millis(100))
+            {
+                gaps += 1;
+            }
+            last_frame = Some(now);
+            frames += 1;
+        }
+        if current == PlaybackState::Ended
+            || began.is_some_and(|began: Instant| began.elapsed() >= Duration::from_secs(15))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let elapsed = began
+        .context("no video frames during profile")?
+        .elapsed()
+        .as_secs_f64();
+    println!(
+        "profile: frames={frames} fps={:.2} decoded={} dropped={} pts_span={:.3} gaps_over_100ms={gaps} buffering_entries={buffering} underruns={} hardware={}",
+        frames as f64 / elapsed,
+        player.snapshot().decoded_frames,
+        player.snapshot().dropped_frames,
+        last_pts - first_pts.unwrap_or(0.0),
+        player.underruns(),
+        player.snapshot().hardware
+    );
+    println!(
+        "clock: max_step_ms={:.2} max_error_ms={:.2}",
+        max_clock_step * 1000.0,
+        max_clock_error * 1000.0
+    );
+    ensure!(
+        frames > 0 && last_pts > first_pts.unwrap_or(0.0),
+        "playback did not advance"
+    );
+    Ok(())
+}
 fn exercise(mut p: Player, open_start: Instant) -> Result<()> {
     p.set_volume(0.0);
     ensure!(
@@ -232,10 +339,20 @@ fn exercise(mut p: Player, open_start: Instant) -> Result<()> {
         "seek to EOF did not end"
     );
     p.toggle_play();
-    let restarted = pump(&mut p, 400)?;
+    let replay_started = Instant::now();
+    let mut restarted = Vec::new();
+    while (restarted.is_empty() || p.position() < 0.1)
+        && replay_started.elapsed() < Duration::from_secs(10)
+    {
+        restarted.extend(pump(&mut p, 10)?);
+    }
     ensure!(
         !restarted.is_empty() && p.position() < 1.0,
         "replay from end failed"
+    );
+    println!(
+        "replay first frames after_ms={:.2}",
+        replay_started.elapsed().as_secs_f64() * 1000.0
     );
     println!(
         "PASS: async open, playback, seek, pause, paused seek, rapid seek, drain, seek after EOF, replay; underruns={}",

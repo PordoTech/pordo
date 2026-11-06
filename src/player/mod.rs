@@ -5,6 +5,8 @@ mod clock;
 mod demux;
 #[path = "native/session.rs"]
 mod session;
+#[path = "native/split.rs"]
+mod split;
 #[path = "native/video.rs"]
 mod video;
 pub use video::VideoFrame;
@@ -36,6 +38,8 @@ pub struct Snapshot {
     pub has_audio: bool,
     pub hardware: bool,
     pub epoch: u64,
+    pub decoded_frames: u64,
+    pub dropped_frames: u64,
 }
 #[derive(Debug)]
 pub enum Event {
@@ -121,6 +125,8 @@ impl Player {
                 has_audio: false,
                 hardware: false,
                 epoch: 1,
+                decoded_frames: 0,
+                dropped_frames: 0,
             }),
             clock: Arc::new(Clock::new()),
             requested: requested.clone(),
@@ -262,6 +268,9 @@ impl Player {
             // A paused seek is allowed one preview frame at/after the requested time.
             if frame.pts <= now + 0.010 || self.shown_epoch != epoch {
                 self.shown_epoch = epoch;
+                if latest.is_some() {
+                    self.shared.snapshot.lock().unwrap().dropped_frames += 1;
+                }
                 latest = Some(frame);
             } else {
                 self.pending = Some(frame);

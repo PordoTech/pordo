@@ -57,6 +57,10 @@ containers and progressive HTTP sources. The separate macOS extension uses
 LAME / mp3lame-encoder (LGPL) for MP3 export. Windows uses the system MP3 encoder with a separate owned gapless
 mux. Software Vorbis/WebP decoders are not bundled; those formats require an
 installed system decoder. System availability is queried before selecting the relevant graph node.
+The remdia SDK directly maintains the MP4 demuxer modifications in its
+`vendor/symphonia-format-isomp4` directory, including MPL-2.0 source, license and
+`REMDIA-CHANGES.md`. Its composition timestamps and indexed seeking add no decoder
+dependency. Retain the matching modified SDK source when distributing binaries.
 Symphonia's upstream ADTS/MPA/FLAC reader crates also contain codec code, but the
 compatibility demux does not register or call those decoders. Rubato and libopus
 are no longer included in the SDK. AVC/HEVC parameter parsing uses h264-reader

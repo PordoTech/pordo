@@ -48,6 +48,214 @@ fn native_media_separate_audio_video_share_seeks_pause_and_eof() {
         p.position() > 0.1 && p.position() < 1.0 && p.snapshot().state != PlaybackState::Ended
     });
 }
+
+#[test]
+#[ignore = "requires staged components and fixtures; simulates a stalled separate audio download"]
+fn native_media_split_network_stall_freezes_clock_and_latest_seek_recovers() {
+    use axum::{
+        Router,
+        body::Body,
+        http::{HeaderMap, Response},
+        routing::get,
+    };
+    use std::sync::atomic::AtomicUsize;
+    let data = Arc::new(std::fs::read(fixture("audio.wav")).unwrap());
+    let available = Arc::new(AtomicUsize::new(data.len() / 3));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let (url, server) = crate::jobs::block_on({
+        let data = data.clone();
+        let available = available.clone();
+        let cancel = cancel.clone();
+        async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let app = Router::new().route("/audio.wav", get(move |headers: HeaderMap| {
+                let data = data.clone(); let available = available.clone(); let cancel = cancel.clone();
+                async move {
+                    let start = headers.get("range").and_then(|h| h.to_str().ok()).and_then(|h| h.strip_prefix("bytes=")).and_then(|h| h.split('-').next()).and_then(|h| h.parse::<usize>().ok()).unwrap_or(0).min(data.len());
+                    let length = data.len();
+                    let body = futures_util::stream::unfold((start, data, available, cancel), |(mut offset, data, available, cancel)| async move {
+                        while offset < data.len() {
+                            let end = (offset + 8192).min(available.load(Ordering::Acquire)).min(data.len());
+                            if end > offset {
+                                let bytes = data[offset..end].to_vec(); offset = end;
+                                return Some((Ok::<_, std::io::Error>(bytes), (offset, data, available, cancel)));
+                            }
+                            tokio::select! {_ = cancel.cancelled() => return None, _ = tokio::time::sleep(Duration::from_millis(5)) => {}}
+                        }
+                        None
+                    });
+                    Response::builder().status(206).header("Content-Type", "audio/wav").header("Accept-Ranges", "bytes")
+                        .header("Content-Length", length - start).header("Content-Range", format!("bytes {start}-{}/{length}", length-1))
+                        .body(Body::from_stream(body)).unwrap()
+                }
+            }));
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            Ok((format!("http://{address}/audio.wav"), server))
+        }
+    }).unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut player = Player::open_split(fixture("av.mp4"), Some(url), None).unwrap();
+        until(&mut player, Duration::from_secs(8), |p, _| {
+            p.snapshot().state == PlaybackState::Buffering
+        });
+        let frozen = player.position();
+        std::thread::sleep(Duration::from_millis(150));
+        pump(&mut player);
+        assert!((player.position() - frozen).abs() < 0.03);
+        player.seek(2.5);
+        std::thread::sleep(Duration::from_millis(100));
+        let id = player.seek(0.0);
+        until(&mut player, Duration::from_secs(4), |_, events| {
+            events
+                .iter()
+                .any(|event| matches!(event, Event::SeekCompleted {id: done, ..} if *done == id))
+        });
+        available.store(data.len(), Ordering::Release);
+        until(&mut player, Duration::from_secs(5), |p, _| {
+            p.position() > 1.5
+        });
+    }));
+    cancel.cancel();
+    server.abort();
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[test]
+#[ignore = "requires PORDO_CADENCE_FILE pointing to a six-second 60fps clip"]
+fn playback_profile_sixty_fps_keeps_future_frames_until_presentation() {
+    let path = std::env::var("PORDO_CADENCE_FILE").unwrap();
+    let mut player = Player::open(path).unwrap();
+    player.set_volume(0.0);
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed() < Duration::from_secs(12) {
+        while let Some(event) = player.poll_event() {
+            if let Event::Error(error) = event {
+                panic!("{error}");
+            }
+        }
+        if player.next_frame(player.sync_time()).is_some() {
+            count += 1;
+        }
+        if player.snapshot().state == PlaybackState::Ended {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(player.snapshot().state, PlaybackState::Ended);
+    println!("60fps presentation: {count}/360 frames");
+    assert!(
+        count >= 342,
+        "more than 5% of future frames were lost: {count}/360"
+    );
+}
+
+#[test]
+#[ignore = "requires PORDO_BFRAME_FILE; compares local and HTTP decoded picture/timestamp associations"]
+fn playback_profile_b_frame_timestamps_match_reference_pictures() {
+    use axum::{
+        Router,
+        body::Body,
+        http::{HeaderMap, Response},
+        routing::get,
+    };
+    let path = std::env::var("PORDO_BFRAME_FILE").unwrap();
+    let data = Arc::new(std::fs::read(&path).unwrap());
+    let (url, server) = crate::jobs::block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let app = Router::new().route(
+            "/video.mp4",
+            get(move |headers: HeaderMap| {
+                let data = data.clone();
+                async move {
+                    let range = headers
+                        .get("range")
+                        .and_then(|h| h.to_str().ok())
+                        .and_then(|h| h.strip_prefix("bytes="))
+                        .and_then(|h| h.split_once('-'));
+                    let start = range
+                        .and_then(|(start, _)| start.parse::<usize>().ok())
+                        .unwrap_or(0)
+                        .min(data.len());
+                    let end = range
+                        .and_then(|(_, end)| end.parse::<usize>().ok())
+                        .map(|end| end.saturating_add(1))
+                        .unwrap_or(data.len())
+                        .min(data.len());
+                    Response::builder()
+                        .status(206)
+                        .header("Content-Type", "video/mp4")
+                        .header("Accept-Ranges", "bytes")
+                        .header("Content-Length", end.saturating_sub(start))
+                        .header(
+                            "Content-Range",
+                            format!("bytes {start}-{}/{}", end.saturating_sub(1), data.len()),
+                        )
+                        .body(Body::from(data[start..end].to_vec()))
+                        .unwrap()
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok((format!("http://{address}/video.mp4"), server))
+    })
+    .unwrap();
+    let pictures = |source| {
+        let engine = crate::media_backend::engine().unwrap();
+        let mut session = unsafe {
+            engine.open(
+                remdia::Request::playback(source),
+                remdia::Cancellation::default(),
+            )
+        }
+        .unwrap();
+        let mut pictures = std::collections::BTreeMap::new();
+        while pictures.len() < 500 {
+            let Some(frame) = session.read().unwrap() else {
+                break;
+            };
+            if let remdia::FrameInfo::Video {
+                pts_us: Some(pts), ..
+            } = frame.info()
+            {
+                let bytes: Vec<_> = (0..4)
+                    .flat_map(|index| frame.buffer().plane(index).iter().copied())
+                    .collect();
+                pictures.insert(*pts, crate::crypto::sha256_hex(&bytes));
+            }
+        }
+        pictures
+    };
+    let reference = pictures(path);
+    let network = pictures(url);
+    server.abort();
+    assert!(reference.len() >= 100);
+    assert_eq!(
+        reference.len(),
+        network.len(),
+        "both paths must produce every picture"
+    );
+    let mismatches: Vec<_> = network
+        .iter()
+        .filter(|(pts, hash)| reference.get(pts) != Some(hash))
+        .map(|(pts, _)| *pts)
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "mismatched timestamps: {mismatches:?}; reference={} network={}",
+        reference.len(),
+        network.len()
+    );
+    println!("MP4 picture/timestamp match: {} frames", reference.len());
+}
 fn pump(player: &mut Player) -> Vec<Event> {
     let mut events = Vec::new();
     while let Some(e) = player.poll_event() {

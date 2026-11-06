@@ -22,6 +22,7 @@ pub enum Message {
     Eof(u64),
     Error(String),
 }
+#[derive(Clone, Copy)]
 pub struct Seek {
     pub epoch: u64,
     pub target: f64,
@@ -41,13 +42,17 @@ impl Demux {
         let (seeks, commands) = unbounded();
         let waiting = Arc::new(AtomicBool::new(false));
         let worker_waiting = waiting.clone();
-        let worker = shared.clone();
+        let worker = Input::new(shared);
+        let audio = shared.audio_source.clone();
         let stop = shared.stop.clone();
         let thread = std::thread::Builder::new()
             .name("pordo-remdia-graph".into())
             .spawn(move || {
-                if let Err(e) = run(&path, &worker, rate, &tx, commands, &worker_waiting)
-                    && !worker.stop.load(Ordering::Acquire)
+                if let Err(e) = if let Some(audio) = audio {
+                    super::split::run(path, audio, &worker, rate, &tx, commands, &worker_waiting)
+                } else {
+                    run(&path, &worker, rate, &tx, commands, &worker_waiting)
+                } && !worker.stop.load(Ordering::Acquire)
                 {
                     let _ = send(&tx, Message::Error(format!("{e:#}")), &worker);
                 }
@@ -71,8 +76,8 @@ impl Drop for Demux {
         }
     }
 }
-fn send(tx: &Sender<Message>, mut message: Message, s: &Shared) -> bool {
-    while !s.stop.load(Ordering::Acquire) {
+pub(super) fn send(tx: &Sender<Message>, mut message: Message, s: &Input) -> bool {
+    while !s.stop.load(Ordering::Acquire) && !s.cancel.is_cancelled() {
         if matches!(&message,Message::Frame(id,_) if *id<s.requested.load(Ordering::Acquire)) {
             return true;
         }
@@ -84,9 +89,9 @@ fn send(tx: &Sender<Message>, mut message: Message, s: &Shared) -> bool {
     }
     false
 }
-fn run(
+pub(super) fn run(
     path: &str,
-    s: &Shared,
+    s: &Input,
     rate: u32,
     tx: &Sender<Message>,
     commands: Receiver<Seek>,
@@ -100,18 +105,6 @@ fn run(
     request.hardware = pordo_core::environment::var_os("PORDO_SOFTWARE").is_none();
     let mut session = unsafe { engine.open(request.clone(), s.cancel.clone()) }
         .with_context(|| format!("open media '{path}' through remdia"))?;
-    let mut external_audio = if let Some(source) = &s.audio_source {
-        let mut audio = request.clone();
-        audio.source = source.clone();
-        Some(
-            unsafe { engine.open(audio, s.cancel.clone()) }
-                .context("open separate audio stream")?,
-        )
-    } else {
-        None
-    };
-    let mut pending = [None, None];
-    let mut finished = [false; 2];
     #[cfg(test)]
     let trace = crate::media_source::is_qq(std::path::Path::new(path));
     #[cfg(test)]
@@ -129,13 +122,7 @@ fn run(
             .map(|d| d as f64 / 1e6)
             .or(s.duration_hint.filter(|d| d.is_finite() && *d > 0.0))
             .unwrap_or(0.0),
-        has_audio: external_audio
-            .as_ref()
-            .unwrap_or(&session)
-            .info()
-            .tracks
-            .iter()
-            .any(|t| t.kind == "audio"),
+        has_audio: session.info().tracks.iter().any(|t| t.kind == "audio"),
         has_video: session
             .info()
             .tracks
@@ -152,7 +139,15 @@ fn run(
     s.cancel.acknowledge_generation(1);
     let mut epoch = 1;
     let mut eof = false;
-    while !s.stop.load(Ordering::Acquire) {
+    let stats = pordo_core::environment::var_os("PORDO_MEDIA_STATS").is_some();
+    let kind = if session.info().tracks.iter().any(|t| t.kind == "video") {
+        "video"
+    } else {
+        "audio"
+    };
+    let started = std::time::Instant::now();
+    let mut trace_frames = 0;
+    while !s.stop.load(Ordering::Acquire) && !s.cancel.is_cancelled() {
         let mut seek = None;
         while let Ok(next) = commands.try_recv() {
             seek = Some(next);
@@ -173,27 +168,26 @@ fn run(
                     continue;
                 }
                 session = opened?;
-                if let Some(source) = &s.audio_source {
-                    let mut audio = updated.clone();
-                    audio.source = source.clone();
-                    let opened = unsafe { engine.open(audio, s.cancel.clone()) };
-                    if s.requested.load(Ordering::Acquire) > next.epoch {
-                        continue;
-                    }
-                    external_audio = Some(opened?);
-                }
                 request = updated;
             }
             waiting.store(true, Ordering::Release);
-            pending = [None, None];
-            finished = [false; 2];
             let target_us = (next.target * 1e6).round() as i64;
-            let result = session.seek(target_us).and_then(|_| {
-                if let Some(audio) = &mut external_audio {
-                    audio.seek(target_us)?;
-                }
-                Ok(())
-            });
+            let seek_started = std::time::Instant::now();
+            if stats {
+                eprintln!(
+                    "[input] {kind} seek epoch={} target={:.3} begin",
+                    next.epoch, next.target
+                );
+            }
+            let result = session.seek(target_us);
+            if stats {
+                eprintln!(
+                    "[input] {kind} seek epoch={} reset_ms={:.2}",
+                    next.epoch,
+                    seek_started.elapsed().as_secs_f64() * 1000.0
+                );
+                eprintln!("[sdk] {kind} metrics={:?}", session.metrics());
+            }
             waiting.store(false, Ordering::Release);
             if s.requested.load(Ordering::Acquire) > next.epoch {
                 continue;
@@ -209,6 +203,7 @@ fn run(
                 );
             }
             epoch = next.epoch;
+            trace_frames = 0;
             eof = false;
             if !send(tx, Message::Seeked(epoch), s) {
                 break;
@@ -219,12 +214,7 @@ fn run(
             continue;
         }
         waiting.store(true, Ordering::Release);
-        let result = read_inputs(
-            &mut session,
-            external_audio.as_mut(),
-            &mut pending,
-            &mut finished,
-        );
+        let result = session.read();
         waiting.store(false, Ordering::Release);
         if s.stop.load(Ordering::Acquire) {
             break;
@@ -234,6 +224,14 @@ fn run(
         }
         match result? {
             Some(frame) => {
+                if stats && kind == "video" && trace_frames < 24 {
+                    eprintln!(
+                        "[input] video frame pts={:?} after_ms={:.2}",
+                        frame.info().pts_us(),
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                    trace_frames += 1;
+                }
                 #[cfg(test)]
                 if trace {
                     eprintln!("QQ frame epoch={epoch}: {:?}", frame.info());
@@ -257,39 +255,30 @@ fn run(
     Ok(())
 }
 
-// At most one lookahead frame per input. Both streams share the session clock,
-// seek epoch and cancellation; neither can run ahead into an unbounded queue.
-fn read_inputs(
-    video: &mut remdia::Session,
-    audio: Option<&mut remdia::Session>,
-    pending: &mut [Option<remdia::Frame>; 2],
-    ended: &mut [bool; 2],
-) -> Result<Option<remdia::Frame>> {
-    let Some(audio) = audio else {
-        return video.read();
-    };
-    for (i, source) in [video, audio].into_iter().enumerate() {
-        while pending[i].is_none() && !ended[i] {
-            match source.read()? {
-                Some(frame)
-                    if matches!(
-                        (i, frame.info()),
-                        (0, remdia::FrameInfo::Video { .. }) | (1, remdia::FrameInfo::Audio { .. })
-                    ) =>
-                {
-                    pending[i] = Some(frame)
-                }
-                Some(_) => {}
-                None => ended[i] = true,
-            }
+#[derive(Clone)]
+pub(super) struct Input {
+    pub stop: Arc<AtomicBool>,
+    pub requested: Arc<std::sync::atomic::AtomicU64>,
+    pub cancel: remdia::Cancellation,
+    progressive: bool,
+    source_key: Option<String>,
+    duration_hint: Option<f64>,
+}
+impl Input {
+    fn new(shared: &Shared) -> Self {
+        Self {
+            stop: shared.stop.clone(),
+            requested: shared.requested.clone(),
+            cancel: shared.cancel.clone(),
+            progressive: shared.progressive,
+            source_key: shared.source_key.clone(),
+            duration_hint: shared.duration_hint,
         }
     }
-    let timestamp = |frame: &remdia::Frame| frame.info().pts_us().unwrap_or(0);
-    let index = match (&pending[0], &pending[1]) {
-        (Some(v), Some(a)) => usize::from(timestamp(a) < timestamp(v)),
-        (Some(_), None) => 0,
-        (None, Some(_)) => 1,
-        (None, None) => return Ok(None),
-    };
-    Ok(pending[index].take())
+    pub fn independent(&self) -> Self {
+        Self {
+            cancel: remdia::Cancellation::with_requested_generation(self.requested.clone()),
+            ..self.clone()
+        }
+    }
 }

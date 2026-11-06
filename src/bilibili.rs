@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use axum::{
     Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -145,23 +145,13 @@ async fn fetch(state: &Proxy, audio: bool, range: Option<&str>) -> Result<Respon
                     response = response.header(name, value);
                 }
             }
-            // No full-file buffering. Stop already-open bodies when the source is dropped.
-            let cancel = state.cancel.clone();
-            let body = futures_util::stream::unfold(
-                (Some(remote), cancel),
-                |(remote, cancel)| async move {
-                    let mut remote = remote?;
-                    tokio::select! {
-                        _ = cancel.cancelled() => None,
-                        chunk = remote.chunk() => match chunk {
-                            Ok(Some(bytes)) => Some((Ok::<_, std::io::Error>(bytes), (Some(remote), cancel))),
-                            Ok(None) => None,
-                            Err(_) => Some((Err(std::io::Error::other("Video stream interrupted")), (None, cancel))),
-                        }
-                    }
-                },
-            );
-            return Ok(response.body(Body::from_stream(body))?);
+            // Read ahead independently of decoder demand, bounded to 2 MiB for
+            // video and 512 KiB for audio (plus one incoming network chunk).
+            return Ok(response.body(buffered_body(
+                remote.bytes_stream(),
+                state.cancel.clone(),
+                if audio { 8 } else { 32 },
+            ))?);
         }
         if attempt == 0 {
             // Serialize renewals; a concurrent audio/video request can reuse the new URLs.
@@ -186,9 +176,102 @@ async fn fetch(state: &Proxy, audio: bool, range: Option<&str>) -> Result<Respon
     Err(anyhow!("Video source unavailable"))
 }
 
+struct ReadAhead(tokio::task::JoinHandle<()>);
+impl Drop for ReadAhead {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+fn buffered_body<S, E>(stream: S, cancel: CancellationToken, slots: usize) -> Body
+where
+    S: futures_util::Stream<Item = std::result::Result<Bytes, E>> + Send + 'static,
+    E: Send + 'static,
+{
+    use futures_util::StreamExt;
+    let (tx, rx) = tokio::sync::mpsc::channel(slots);
+    let body_cancel = cancel.clone();
+    let producer = tokio::spawn(async move {
+        let mut stream = std::pin::pin!(stream);
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tx.closed() => return,
+                chunk = stream.next() => chunk,
+            };
+            let mut bytes = match chunk {
+                Some(Ok(bytes)) => bytes,
+                Some(Err(_)) => {
+                    let _ = tx
+                        .send(Err(std::io::Error::other("Video stream interrupted")))
+                        .await;
+                    return;
+                }
+                None => return,
+            };
+            while !bytes.is_empty() {
+                let chunk = bytes.split_to(bytes.len().min(64 * 1024));
+                tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    result = tx.send(Ok(chunk)) => if result.is_err() { return; },
+                }
+            }
+        }
+    });
+    let body = futures_util::stream::unfold(
+        (rx, ReadAhead(producer), body_cancel),
+        |(mut rx, producer, cancel)| async move {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => None,
+                bytes = rx.recv() => bytes.map(|bytes| (bytes, (rx, producer, cancel))),
+            }
+        },
+    );
+    Body::from_stream(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn read_ahead_is_bounded_and_stops_when_the_consumer_or_source_leaves() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let reads = Arc::new(AtomicUsize::new(0));
+        let count = reads.clone();
+        let stream = futures_util::stream::poll_fn(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            std::task::Poll::Ready(Some(Ok::<_, ()>(Bytes::from(vec![0; 64 * 1024]))))
+        });
+        let body = buffered_body(stream, CancellationToken::new(), 2);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            3,
+            "two queued blocks and one in flight"
+        );
+        drop(body);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 3);
+        let cancel = CancellationToken::new();
+        let body = buffered_body(
+            futures_util::stream::pending::<Result<Bytes, ()>>(),
+            cancel.clone(),
+            2,
+        );
+        cancel.cancel();
+        let bytes = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            axum::body::to_bytes(body, 100),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(bytes.is_empty());
+    }
     #[test]
     fn range_input_rejects_multiple_and_invalid_ranges() {
         for value in ["bytes=0-511", "bytes=512-", "bytes=-512"] {

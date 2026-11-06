@@ -64,6 +64,8 @@ pub(super) fn run(
     let (mut seeking, mut ack, mut eof, mut ended, mut buffering, mut audio_finished) =
         (true, true, false, false, false, false);
     let mut video = VecDeque::<VideoFrame>::new();
+    let mut video_limit = 8;
+    let streaming = s.progressive || s.audio_source.is_some();
     let (mut video_end, mut frame_duration) = (0., 1. / 30.);
     let mut next_video_pts = 0.;
     let mut deferred = VecDeque::new();
@@ -197,6 +199,12 @@ pub(super) fn run(
         let wants_video = header.has_video && video_end <= now + 0.5;
         if !ended && (seeking || wants_audio || wants_video || eof) {
             for _ in 0..32 {
+                // Backpressure future frames instead of throwing them away to
+                // decode half a second ahead. At 60fps the old eight-frame cap
+                // discarded most of each burst even when decoding was fast.
+                if video.len() >= video_limit {
+                    break;
+                }
                 if audio
                     .as_ref()
                     .is_some_and(|a| a.pending.len() > rate as usize / 2)
@@ -231,14 +239,14 @@ pub(super) fn run(
                             }
                             next_video_pts = pts + frame_duration;
                             video_end = next_video_pts;
-                            s.snapshot.lock().unwrap().hardware = *hardware_decoded;
-                            let f = VideoFrame::from_remdia(epoch, pts, frame);
-                            let bytes =
-                                f.image().width() as usize * f.image().height() as usize * 4;
-                            let limit = (64 * 1024 * 1024 / bytes.max(1)).clamp(1, 8);
-                            if video.len() >= limit {
-                                video.pop_front();
+                            {
+                                let mut snapshot = s.snapshot.lock().unwrap();
+                                snapshot.hardware = *hardware_decoded;
+                                snapshot.decoded_frames += 1;
                             }
+                            let bytes = frame.buffer().len();
+                            video_limit = (64 * 1024 * 1024 / bytes.max(1)).clamp(1, 48);
+                            let f = VideoFrame::from_remdia(epoch, pts, frame);
                             video.push_back(f);
                             // Publish the target preview before reading ahead to prime audio.
                             if seeking {
@@ -270,13 +278,16 @@ pub(super) fn run(
         let now = s.clock.now();
         while video.len() > 1 && video.front().is_some_and(|f| f.pts + 0.1 < now) {
             video.pop_front();
+            s.snapshot.lock().unwrap().dropped_frames += 1;
         }
         while let Some(f) = video.pop_front() {
             match frames.try_send(f) {
                 Ok(()) => {}
                 Err(TrySendError::Full(f)) => {
                     if f.pts + 0.1 < now && !seeking {
-                        let _ = stale.try_recv();
+                        if stale.try_recv().is_ok() {
+                            s.snapshot.lock().unwrap().dropped_frames += 1;
+                        }
                         video.push_front(f);
                         continue;
                     }
@@ -299,7 +310,7 @@ pub(super) fn run(
                     && starving.get_or_insert_with(Instant::now).elapsed()
                         >= Duration::from_millis(250)
                 {
-                    if music || s.progressive {
+                    if music || streaming {
                         if !buffering {
                             buffering = true;
                             s.clock.set_playing(false);
@@ -333,8 +344,17 @@ pub(super) fn run(
                 }
             }
         }
-        let video_ready = !header.has_video || video_end > target || eof;
-        let audio_ready = audio.as_ref().is_none_or(|a| a.end > target || eof);
+        // Network inputs need a short presentation cushion before the clock
+        // starts. A paused seek still publishes its preview immediately.
+        let cushion = if streaming && s.desired_playing.load(Ordering::Acquire) {
+            (frame_duration * (video_limit + 2) as f64 * 0.75).min(0.5)
+        } else {
+            0.0
+        };
+        let video_ready = !header.has_video || video_end > target + cushion || eof;
+        let audio_ready = audio
+            .as_ref()
+            .is_none_or(|a| a.end > target + cushion || eof);
         if seeking
             && ack
             && video_ready
@@ -359,11 +379,13 @@ pub(super) fn run(
             }
         }
         if buffering {
-            let ready = output
-                .as_ref()
-                .is_some_and(|out| out.capacity - out.producer.slots() >= out.rate as usize / 10)
-                || eof
-                || video_end > s.clock.now() + 0.25;
+            let audio_ready = audio.is_none()
+                || audio_fallback
+                || output.as_ref().is_some_and(|out| {
+                    out.capacity - out.producer.slots() >= out.rate as usize / 4
+                });
+            let video_ready = !header.has_video || video_end > s.clock.now() + 0.1;
+            let ready = eof || (audio_ready && video_ready);
             if ready {
                 buffering = false;
                 let playing = s.desired_playing.load(Ordering::Acquire);
@@ -373,7 +395,7 @@ pub(super) fn run(
                     .store(playing && audio.is_some(), Ordering::Release);
             }
         }
-        if s.progressive
+        if streaming
             && !music
             && !seeking
             && !ended

@@ -1,6 +1,6 @@
 [package]
 name = "pordo"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 
 [workspace]
@@ -10,7 +10,7 @@ members = ["crates/pordo-core", "crates/pordo-android"]
 default-members = [".", "crates/pordo-core"]
 
 [dependencies]
-pordo-core = { path = "crates/pordo-core", version = "0.6.0" }
+pordo-core = { path = "crates/pordo-core", version = "0.6.1" }
 anyhow = "1"
 # Share the crypto implementation already used by rustls and librqbit.
 aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
@@ -21,7 +21,7 @@ crossbeam-channel = "0.5.17"
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "links", "wgpu_no_default_features"] }
 egui-phosphor = { version = "0.14", features = ["subset"] }
 # Playback and subtitle export use independent remdia component graphs.
-remdia = { git = "https://github.com/PordoTech/remdia.git", rev = "6e6444ff7c4e60cff55e0a61172c5ec47d837cc3", features = ["bundled"] }
+remdia = { git = "https://github.com/PordoTech/remdia.git", rev = "4a0a8d3745602c956554b1fbb88eb1cd71375619", features = ["bundled"] }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"

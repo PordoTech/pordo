@@ -2,7 +2,7 @@
 name = "pordo-core"
 # Keep in lockstep with the application version: comic/music source user agents
 # embed CARGO_PKG_VERSION and must stay identical across desktop and Android.
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 description = "Platform-neutral pordo logic: comic/music sources, library, caches, downloads, lyrics and remdia media jobs."
 license = "MIT"
@@ -25,7 +25,7 @@ md5 = "0.8"
 regex = "1"
 # Same pinned SDK revision as the application; bundled registers the built-in
 # factories on every platform, including the Android framework pack.
-remdia = { git = "https://github.com/PordoTech/remdia.git", rev = "6e6444ff7c4e60cff55e0a61172c5ec47d837cc3", features = ["bundled"] }
+remdia = { git = "https://github.com/PordoTech/remdia.git", rev = "4a0a8d3745602c956554b1fbb88eb1cd71375619", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "multipart", "query", "rustls", "cookies"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

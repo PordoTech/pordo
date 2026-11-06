@@ -81,6 +81,21 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
+    if args.first().map(String::as_str) == Some("--profile-bilibili") {
+        if let Err(error) = selftest::profile_bilibili(args.get(1).cloned().unwrap_or_default()) {
+            eprintln!("Bilibili profile failed: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if args.first().map(String::as_str) == Some("--profile-media") {
+        if let Err(error) = selftest::profile_media(args.get(1).cloned().unwrap_or_default()) {
+            eprintln!("Media profile failed: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let initial = args;
     let options = eframe::NativeOptions {

@@ -3948,7 +3948,7 @@ dependencies = [
 
 [[package]]
 name = "pordo"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "pordo-android"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "jni 0.21.1",
@@ -4006,7 +4006,7 @@ dependencies = [
 
 [[package]]
 name = "pordo-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -4452,7 +4452,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "remdia"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "libloading",
@@ -4476,7 +4476,7 @@ dependencies = [
 [[package]]
 name = "remdia-android-platform"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "jni 0.21.1",
@@ -4486,7 +4486,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-android"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "remdia-android-platform",
@@ -4498,7 +4498,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-fallback-demux"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "remdia-graph",
@@ -4520,7 +4520,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-fallback-resample"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "cc",
@@ -4532,7 +4532,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-image"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "cc",
@@ -4547,7 +4547,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-macos"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "cc",
@@ -4561,7 +4561,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-native"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "libc",
@@ -4574,7 +4574,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-system-audio"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "libloading",
@@ -4588,7 +4588,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-system-demux"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "cc",
@@ -4602,7 +4602,7 @@ dependencies = [
 [[package]]
 name = "remdia-backend-windows"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "remdia-graph",
@@ -4615,7 +4615,7 @@ dependencies = [
 [[package]]
 name = "remdia-bitstream"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
 ]
@@ -4623,7 +4623,7 @@ dependencies = [
 [[package]]
 name = "remdia-buffer"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
 ]
@@ -4631,7 +4631,7 @@ dependencies = [
 [[package]]
 name = "remdia-graph"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "remdia-buffer",
@@ -4644,12 +4644,12 @@ dependencies = [
 [[package]]
 name = "remdia-plugin-abi"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 
 [[package]]
 name = "remdia-types"
 version = "0.3.0"
-source = "git+https://github.com/PordoTech/remdia.git?rev=6e6444ff7c4e60cff55e0a61172c5ec47d837cc3#6e6444ff7c4e60cff55e0a61172c5ec47d837cc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "anyhow",
  "serde",
@@ -5493,8 +5493,7 @@ dependencies = [
 [[package]]
 name = "symphonia-format-isomp4"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e681a70e1870d34e02abf1dbc51e4267c3f1827801474e8870be8c689fc4dc3"
+source = "git+https://github.com/PordoTech/remdia.git?rev=4a0a8d3745602c956554b1fbb88eb1cd71375619#4a0a8d3745602c956554b1fbb88eb1cd71375619"
 dependencies = [
  "log",
  "symphonia-common",

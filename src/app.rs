@@ -31,12 +31,13 @@ mod preferences;
 mod providers;
 mod qq;
 mod queue_drag;
+mod video_header;
 mod window;
 mod workspace;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 
 const BAR_BOTTOM: f32 = 92.0;
-const BAR_TOP: f32 = 56.0;
+const BAR_TOP: f32 = window::CAPTION_HEIGHT;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
 type MetadataResult = (String, Option<Arc<crate::media::Info>>);
 
@@ -980,60 +981,8 @@ impl eframe::App for App {
             }
         }
 
-        // Immersive video chrome shares the library's visual language.
         if a > 0.02 {
-            let top_rect = Rect::from_min_size(screen.min, vec2(screen.width(), BAR_TOP));
-            painter.rect_filled(top_rect, 0, Color32::from_black_alpha((a * 200.0) as u8));
-            let mut header_content = top_rect.shrink2(vec2(20.0, 10.0));
-            header_content.max.x -= window::controls_width(&ctx);
-            let mut back = workspace::child(
-                root,
-                "video-back",
-                Rect::from_min_size(
-                    screen.min + vec2(20.0, 12.0),
-                    Vec2::splat(design::CONTROL_HEIGHT),
-                ),
-            );
-            back.multiply_opacity(a);
-            if design::back_button(
-                &mut back,
-                language.text("返回视频库", "Back to video library"),
-            )
-            .clicked()
-            {
-                self.navigate(workspace::Page::Video);
-            }
-            let mut title = workspace::child(
-                root,
-                "video-title",
-                Rect::from_min_max(
-                    screen.min + vec2(68.0, 16.0),
-                    pos2(header_content.max.x - 52.0, screen.min.y + 44.0),
-                ),
-            );
-            title.add(egui::Label::new(RichText::new(&self.title).size(18.0).strong()).truncate());
-            let mut open = workspace::child(
-                root,
-                "video-open",
-                Rect::from_min_size(
-                    pos2(
-                        header_content.max.x - design::CONTROL_HEIGHT,
-                        screen.min.y + 12.0,
-                    ),
-                    Vec2::splat(design::CONTROL_HEIGHT),
-                ),
-            );
-            open.multiply_opacity(a);
-            if design::icon_button(
-                &mut open,
-                icons::FOLDER_OPEN,
-                language.text("打开文件", "Open files"),
-                false,
-            )
-            .clicked()
-            {
-                act = Act::Open;
-            }
+            self.video_header(root, screen, a, &mut act);
         }
 
         if a > 0.02 && (self.player.is_some() || self.loading) && !music {

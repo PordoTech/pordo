@@ -1,9 +1,11 @@
 //! Responsive discovery cards and a small, lazy artwork cache.
 use super::*;
-use egui::{FontId, StrokeKind};
+use egui::FontId;
 use std::sync::OnceLock;
 
 const GAP: f32 = 12.0;
+const MIN_CARD_WIDTH: f32 = 165.0;
+const MAX_COLUMNS: usize = 8;
 const CACHE_LIMIT: usize = 48;
 const FETCH_LIMIT: usize = 4;
 
@@ -154,7 +156,7 @@ pub(super) fn results(
     favorites: &std::collections::HashSet<u64>,
 ) -> Option<Action> {
     let mut action = None;
-    let creator_columns = columns(ui.available_width(), 150.0, 6);
+    let creator_columns = result_columns(ui.available_width());
     if state.creator.is_none() && !state.uploaders.is_empty() {
         let preview = state.searched_kind == SearchKind::All;
         let count = if preview {
@@ -188,7 +190,7 @@ pub(super) fn results(
     };
     if !videos.is_empty() {
         heading(ui, language.text("视频", "Videos"), videos.len(), None);
-        let columns = columns(ui.available_width(), 132.0, 8);
+        let columns = result_columns(ui.available_width());
         let width = card_width(ui.available_width(), columns);
         for row in videos.chunks(columns) {
             ui.horizontal_top(|ui| {
@@ -211,7 +213,7 @@ pub(super) fn creators(
     language: Language,
     favorites: &std::collections::HashSet<u64>,
 ) -> Option<Action> {
-    let columns = columns(ui.available_width(), 150.0, 6);
+    let columns = result_columns(ui.available_width());
     let width = card_width(ui.available_width(), columns);
     let mut action = None;
     for row in creators.chunks(columns) {
@@ -238,6 +240,9 @@ fn columns(width: f32, minimum: f32, maximum: usize) -> usize {
     ((width + GAP) / (minimum + GAP))
         .floor()
         .clamp(1.0, maximum as f32) as usize
+}
+fn result_columns(width: f32) -> usize {
+    columns(width, MIN_CARD_WIDTH, MAX_COLUMNS)
 }
 fn card_width(width: f32, columns: usize) -> f32 {
     (width - GAP * columns.saturating_sub(1) as f32) / columns as f32
@@ -299,19 +304,6 @@ fn surface(ui: &Ui, rect: Rect, response: &Response) {
         } else {
             SURFACE
         },
-    );
-    ui.painter().rect_stroke(
-        rect,
-        12,
-        Stroke::new(
-            1.0,
-            if hover {
-                Color32::from_rgb(83, 113, 104)
-            } else {
-                design::LINE
-            },
-        ),
-        StrokeKind::Inside,
     );
 }
 fn lines(
@@ -446,7 +438,7 @@ fn creator_card(
     language: Language,
     favorite: bool,
 ) -> Option<Action> {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 88.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 96.0), Sense::click());
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(format!("{} · UID {}", creator.uname, creator.mid));
@@ -457,12 +449,12 @@ fn creator_card(
     if !ui.is_rect_visible(rect) {
         return None;
     }
-    let avatar = Rect::from_min_size(rect.min + vec2(10.0, 12.0), vec2(36.0, 36.0));
+    let avatar = Rect::from_min_size(rect.min + vec2(10.0, 12.0), vec2(40.0, 40.0));
     if let Some(texture) = previews.texture(ui, avatar, creator.avatar.as_deref(), true) {
-        design::cover(ui, &texture, avatar, 18);
+        design::cover(ui, &texture, avatar, 20);
     } else {
         ui.painter()
-            .circle_filled(avatar.center(), 18.0, Color32::from_rgb(45, 68, 63));
+            .circle_filled(avatar.center(), 20.0, Color32::from_rgb(45, 68, 63));
         ui.painter().text(
             avatar.center(),
             egui::Align2::CENTER_CENTER,
@@ -505,7 +497,7 @@ fn creator_card(
     lines(
         ui,
         &stats,
-        rect.min + vec2(10.0, 63.0),
+        rect.min + vec2(10.0, 71.0),
         width - 20.0,
         10.0,
         Color32::from_rgb(183, 200, 193),
@@ -605,7 +597,8 @@ mod tests {
     #[test]
     fn cards_fit_responsive_columns_and_compact_counts() {
         for width in [280.0, 628.0, 1030.0, 1500.0] {
-            let count = columns(width, 232.0, 4);
+            let count = result_columns(width);
+            assert!(card_width(width, count) >= MIN_CARD_WIDTH);
             assert!(
                 card_width(width, count) * count as f32 + GAP * count.saturating_sub(1) as f32
                     <= width + 0.01

@@ -130,3 +130,24 @@ upgrades retained UID and first-install time. The legacy launcher alias opened
 the renamed app. macOS ZIP relocation, signing and playback passed; DMG
 checksum verification passed but mounting was unavailable on this host.
 Windows installer migration checks are included in CI and were not run locally.
+
+## Playback diagnostics
+
+`pordo --profile-bilibili <BV>` measures 15 seconds of the presentation pipeline
+at the default authorized quality, using the existing local sign-in session when
+available. It reports presented/decoded/dropped frames, buffer entries, audio
+underruns and clock continuity without logging account keys or CDN URLs.
+`pordo --profile-media <path>` runs the same measurement on a local file.
+These commands do not include GPU upload or window presentation costs; use
+`./scripts/preview.ps1 -Stats` to inspect those separately.
+
+MP4 timing and indexed seeking are maintained in remdia. Desktop, core and Android
+pin the same published SDK Git revision; standalone builds do not require a sibling
+checkout or an application-level Symphonia/Cargo dependency override.
+
+The SDK uses a direct vendored dependency with MPL-2.0 source/change notes at
+`remdia/vendor/symphonia-format-isomp4`. It preserves MP4 composition/decode times,
+uses SIDX/STSS for random access and reuses normal readers. Regressions compare
+native local-file and HTTP decoded picture hashes at every presentation timestamp.
+`PORDO_MEDIA_STATS=1` also logs SDK read/seek work counters; those exclude GPU and
+audio output costs. SDK source cache limits are controlled by `Request.network`.
