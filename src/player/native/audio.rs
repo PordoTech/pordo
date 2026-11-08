@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::clock::Clock;
 use anyhow::Result;
@@ -10,6 +10,13 @@ use anyhow::{Context, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use rtrb::{Producer, RingBuffer};
+
+#[cfg(test)]
+thread_local! { static INITIAL_OPEN_FAILURES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn simulate_initial_failures(count: u32) {
+    INITIAL_OPEN_FAILURES.with(|n| n.set(count));
+}
 
 #[derive(Clone, Copy)]
 pub struct Sample {
@@ -25,8 +32,13 @@ pub struct OutputControl {
     pub enabled: AtomicBool,
     pub failed: AtomicBool,
     pub underruns: AtomicU64,
+    pub device_error: Mutex<Option<String>>,
     #[cfg(test)]
     pub simulated_rate: AtomicU32,
+    #[cfg(test)]
+    pub open_attempts: AtomicU32,
+    #[cfg(test)]
+    pub simulated_open_failures: AtomicU32,
 }
 impl OutputControl {
     pub fn new() -> Self {
@@ -35,8 +47,13 @@ impl OutputControl {
             enabled: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
+            device_error: Mutex::new(None),
             #[cfg(test)]
             simulated_rate: AtomicU32::new(48000),
+            #[cfg(test)]
+            open_attempts: AtomicU32::new(0),
+            #[cfg(test)]
+            simulated_open_failures: AtomicU32::new(INITIAL_OPEN_FAILURES.with(|n| n.replace(0))),
         }
     }
 }
@@ -64,7 +81,11 @@ pub fn open_output(
     let capacity = (rate as usize / 2).max(1024);
     let (producer, consumer) = RingBuffer::<Sample>::new(capacity);
     let err_control = control.clone();
-    let err_cb = move |_error| {
+    let err_cb = move |error: cpal::Error| {
+        *err_control
+            .device_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
         err_control.failed.store(true, Ordering::Release);
     };
 
@@ -156,6 +177,14 @@ pub fn open_output(
     control: Arc<OutputControl>,
     _volume: Arc<AtomicU32>,
 ) -> Result<AudioOut> {
+    control.open_attempts.fetch_add(1, Ordering::AcqRel);
+    if control
+        .simulated_open_failures
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+        .is_ok()
+    {
+        anyhow::bail!("simulated audio output open failure");
+    }
     let rate = control.simulated_rate.load(Ordering::Acquire);
     let capacity = rate as usize / 2;
     let (producer, mut consumer) = RingBuffer::<Sample>::new(capacity);

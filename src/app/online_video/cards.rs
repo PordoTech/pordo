@@ -326,27 +326,16 @@ fn lines(
     let galley = ui.painter().layout_job(job);
     ui.painter().galley(position, galley, color);
 }
-fn video_card(
-    ui: &mut Ui,
+/// Shared artwork, duration badge and hover affordance for videos and parts.
+fn video_cover(
+    ui: &Ui,
     previews: &mut Previews,
-    video: &bilibili::Video,
-    width: f32,
-    language: Language,
-) -> Response {
-    let cover_height = (width - 16.0) * 9.0 / 16.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 92.0), Sense::click());
-    let response = response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(&video.title);
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &video.title)
-    });
-    surface(ui, rect, &response);
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
-    let cover = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(width - 16.0, cover_height));
-    if let Some(texture) = previews.texture(ui, cover, video.cover.as_deref(), false) {
+    cover: Rect,
+    cover_url: Option<&str>,
+    duration: &str,
+    response: &Response,
+) {
+    if let Some(texture) = previews.texture(ui, cover, cover_url, false) {
         design::cover(ui, &texture, cover, 8);
     } else {
         ui.painter()
@@ -358,9 +347,9 @@ fn video_card(
             icons::FILM_SLATE,
         );
     }
-    if !video.duration.is_empty() {
+    if !duration.is_empty() {
         let text = ui.painter().layout_no_wrap(
-            video.duration.clone(),
+            duration.into(),
             FontId::proportional(11.0),
             Color32::WHITE,
         );
@@ -386,6 +375,82 @@ fn video_card(
             icons::PLAY,
         );
     }
+}
+
+pub(super) fn part_card(
+    ui: &mut Ui,
+    previews: &mut Previews,
+    part: &bilibili::Part,
+    cover_url: Option<&str>,
+    current: bool,
+) -> Response {
+    let width = ui.available_width();
+    let cover_height = (width - 16.0) * 9.0 / 16.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 60.0), Sense::click());
+    let label = format!("P{} \u{00b7} {}", part.page, part.part);
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(&label);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label)
+    });
+    if current {
+        ui.painter().rect_filled(rect, 12, design::SELECTED);
+    } else {
+        surface(ui, rect, &response);
+    }
+    if ui.is_rect_visible(rect) {
+        let cover =
+            Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(width - 16.0, cover_height));
+        video_cover(
+            ui,
+            previews,
+            cover,
+            cover_url,
+            &fmt_time(part.duration as f64),
+            &response,
+        );
+        lines(
+            ui,
+            &label,
+            pos2(cover.left(), cover.bottom() + 8.0),
+            cover.width(),
+            13.0,
+            if current { ACCENT } else { design::TEXT },
+            2,
+        );
+    }
+    response
+}
+
+fn video_card(
+    ui: &mut Ui,
+    previews: &mut Previews,
+    video: &bilibili::Video,
+    width: f32,
+    language: Language,
+) -> Response {
+    let cover_height = (width - 16.0) * 9.0 / 16.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 92.0), Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(&video.title);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &video.title)
+    });
+    surface(ui, rect, &response);
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let cover = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(width - 16.0, cover_height));
+    video_cover(
+        ui,
+        previews,
+        cover,
+        video.cover.as_deref(),
+        &video.duration,
+        &response,
+    );
     let x = rect.min.x + 8.0;
     let y = cover.max.y + 8.0;
     lines(

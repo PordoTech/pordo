@@ -56,6 +56,11 @@ impl Language {
             if message.starts_with("Magnet metadata timed out") {
                 return "磁链元数据解析超时：没有可连通的 peer。稍后重试；若使用代理，请在磁链弹窗复制并应用路由规则后重试。".into();
             }
+            if message.starts_with("audio device unavailable")
+                || message.starts_with("audio unavailable")
+            {
+                return "音频设备暂不可用，视频将继续无声播放；可重新连接设备后重新打开视频".into();
+            }
             if message.starts_with("audio device failed") {
                 return "音频设备失效，将继续无声播放".into();
             }

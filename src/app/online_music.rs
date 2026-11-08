@@ -549,9 +549,22 @@ impl App {
                 input_width,
                 l.text("歌曲 / 歌手", "Song / artist"),
             );
-            if (design::primary_icon_button(ui, icons::MAGNIFYING_GLASS, l.text("搜索", "Search"))
-                .clicked()
-                || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))))
+            let busy = self.online_music.search.is_some();
+            let response = design::primary_icon_button_loading(
+                ui,
+                icons::MAGNIFYING_GLASS,
+                if busy {
+                    l.text("取消搜索", "Cancel search")
+                } else {
+                    l.text("搜索", "Search")
+                },
+                busy,
+            );
+            let clicked = response.clicked() && !busy;
+            if response.clicked() && busy {
+                self.online_music.search = None;
+            }
+            if (clicked || input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
                 && !self.online_music.keyword.trim().is_empty()
             {
                 self.online_music.searched = self.online_music.keyword.trim().into();
@@ -571,26 +584,18 @@ impl App {
         }
         let mut download_song = None;
         ui.add_space(6.0);
-        if self.online_music.search.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(l.text("正在搜索…", "Searching…"));
-                if design::compact_icon_button(ui, icons::X, l.text("取消", "Cancel"), false)
-                    .clicked()
-                {
-                    self.online_music.search = None;
-                }
-            });
-        } else if self.online_music.songs.is_empty() {
-            design::empty_state(
-                ui,
-                icons::MUSIC_NOTES,
-                if self.online_music.searched.is_empty() {
-                    l.text("输入关键词搜索在线音乐", "Search online music")
-                } else {
-                    l.text("未找到匹配歌曲", "No matching songs")
-                },
-            );
+        if self.online_music.songs.is_empty() {
+            if self.online_music.search.is_none() {
+                design::empty_state(
+                    ui,
+                    icons::MUSIC_NOTES,
+                    if self.online_music.searched.is_empty() {
+                        l.text("输入关键词搜索在线音乐", "Search online music")
+                    } else {
+                        l.text("未找到匹配歌曲", "No matching songs")
+                    },
+                );
+            }
         } else {
             design::scroll()
                 .id_salt("music_results")

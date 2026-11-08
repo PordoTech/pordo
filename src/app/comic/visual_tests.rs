@@ -1767,6 +1767,24 @@ fn comic_catalog_visuals() {
             );
         }
         state.tab = Tab::Search;
+        state.search.push((
+            domain::Site {
+                id: "fixture".into(),
+                name: "Fixture".into(),
+            },
+            Job::spawn(|_| std::future::pending()),
+        ));
+        state
+            .update_queue
+            .push_back(state.entries()[0].book.clone());
+        capture.save(
+            &ctx,
+            [width, 580],
+            &directory.join(format!("comic-search-loading-{width}.png")),
+            |ui| state.catalog(ui, &settings),
+        );
+        state.search.clear();
+        state.update_queue.clear();
         capture.save_with_pointer(
             &ctx,
             [width, 580],

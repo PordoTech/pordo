@@ -73,20 +73,19 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 for (index, part) in active.detail.parts.iter().enumerate() {
-                    let label = format!("P{} \u{00b7} {}", part.page, part.part);
-                    let current = index == active.part;
-                    let response = ui.add_sized(
-                        [ui.available_width(), 44.0],
-                        egui::Button::new(RichText::new(&label).color(if current {
-                            ACCENT
-                        } else {
-                            design::TEXT
-                        }))
-                        .selected(current)
-                        .wrap()
-                        .frame(true),
-                    );
-                    if response.on_hover_text(&label).clicked() {
+                    if ui
+                        .push_id(part.cid, |ui| {
+                            cards::part_card(
+                                ui,
+                                &mut self.online_video.previews,
+                                part,
+                                active.detail.cover.as_deref(),
+                                index == active.part,
+                            )
+                        })
+                        .inner
+                        .clicked()
+                    {
                         selected = Some(index);
                     }
                 }
@@ -437,6 +436,21 @@ mod tests {
                 app.workspace.page = workspace::Page::Playing;
                 app.mode = UiMode::Video;
                 app.online_video.active = Some(active());
+                let url = "https://i0.hdslb.com/bfs/archive/queue-cover-fixture.png";
+                app.online_video.active.as_mut().unwrap().detail.cover = Some(url.into());
+                let image = crate::pixels::generated(320, 180, |x, y| {
+                    if y > 90 + x / 5 {
+                        [30, 65, 65, 255]
+                    } else {
+                        [80, 135, 150, 255]
+                    }
+                });
+                let texture = ctx.load_texture(
+                    "queue-cover-fixture",
+                    egui::ColorImage::from_rgba_unmultiplied([320, 180], image.bytes()),
+                    egui::TextureOptions::LINEAR,
+                );
+                app.online_video.previews.insert_fixture(url, texture);
                 app.source = Some(active().media_path);
                 app.title = language
                     .text("沿着山路，去看远方的海", "A road to the distant sea")

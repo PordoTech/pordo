@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn choosing_video_enters_playback_before_metadata_and_back_cancels_loading() {
+    let ctx = egui::Context::default();
+    let mut app = comic::visual_tests::settings_fixture(&ctx);
+    app.workspace.page = workspace::Page::Video;
+    app.ui_kind_music = Some(true);
+    app.online_video.search = Some(Job::spawn(|_| std::future::pending()));
+    app.begin_bilibili_playback(
+        Job::spawn(|_| std::future::pending()),
+        2,
+        None,
+        "Selected card".into(),
+    );
+    assert_eq!(app.workspace.page as u8, workspace::Page::Playing as u8);
+    assert!(app.loading && app.online_video.detail_job.is_some());
+    assert!(app.online_video.search.is_none());
+    assert_eq!(app.title, "Selected card");
+    assert!(
+        !app.is_music(),
+        "switch directly from music to video loading"
+    );
+    app.navigate(workspace::Page::Video);
+    assert!(!app.loading && app.online_video.detail_job.is_none());
+}
+
+#[test]
+fn playback_device_warnings_do_not_become_global_comic_errors() {
+    let ctx = egui::Context::default();
+    let mut app = comic::visual_tests::settings_fixture(&ctx);
+    app.settings.language = Language::English;
+    app.playback_warning = Some("audio device unavailable; continuing with video".into());
+    app.loading = true;
+    app.settings_open = false;
+    for page in [
+        workspace::Page::Comic,
+        workspace::Page::Home,
+        workspace::Page::Settings,
+    ] {
+        app.workspace.page = page;
+        assert!(app.visible_playback_warning().is_none());
+    }
+    app.workspace.page = workspace::Page::Comic;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1000.0, 760.0))),
+            ..Default::default()
+        },
+        |ui| app.workspace_ui(ui),
+    );
+    assert!(!output.shapes.iter().any(
+        |s| matches!(&s.shape,Shape::Text(t) if t.galley.text().contains("continuing with video"))
+    ));
+    output.textures_delta.clear();
+    assert!(app.error.is_none());
+    app.workspace.page = workspace::Page::Playing;
+    assert!(app.visible_playback_warning().is_some());
+}
+
+#[test]
 fn search_never_shows_the_old_playback_setup_page_or_permission_hint() {
     let ctx = egui::Context::default();
     let mut app = comic::visual_tests::settings_fixture(&ctx);
@@ -321,6 +379,14 @@ fn bilibili_visuals() {
             &directory.join(format!("search-{name}.png")),
             |ui| app.workspace_ui(ui),
         );
+        app.online_video.search = Some(Job::spawn(|_| std::future::pending()));
+        capture.save(
+            &ctx,
+            [900, 740],
+            &directory.join(format!("search-loading-{name}.png")),
+            |ui| app.workspace_ui(ui),
+        );
+        app.online_video.search = None;
         app.online_video.searched_kind = SearchKind::Uploader;
         app.online_video.kind = SearchKind::Uploader;
         app.online_video.videos.clear();

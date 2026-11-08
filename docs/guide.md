@@ -39,6 +39,10 @@ Video playback offers **1.0×**, **1.25×**, **1.5×**, **2.0×** and **3.0×** 
 speed menu. Audio pitch is preserved; the remembered video speed does not change music playback.
 While a video is playing (including seeking or buffering), Pordo requests that the operating system keep the display awake. Pausing, ending, stopping or closing playback releases that request.
 
+Music, video and comic searches show progress in the search button without adding a loading row below the input. Comic update checks keep the refresh icon's size while it spins.
+
+If a video's audio device disconnects, recovery waits while the video is paused and resumes with playback. Initial audio-output failures also retry. Audio recovery notices appear only on the current playback page.
+
 ### Online music
 
 Configure the music-source API key in **Settings → Music**. The ChKSz adapter exposes NetEase Cloud Music, QQ Music and Kugou search and playback; availability and quality depend on the upstream service.
@@ -88,7 +92,7 @@ pauses, speed changes and seeking. Comments stay within the picture and leave ro
 for subtitles and controls. Animated/scripted comments and posting are not supported.
 Some videos return fewer comments without signing in; a danmaku error does not stop playback.
 
-Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Selecting a video starts playback directly, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right controls are Quality, Speed, Subtitles, Volume, Play queue and Fullscreen; local videos hide Quality. The play-queue sidebar lists the current video's parts, highlights the playing part and switches parts on click. Changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
+Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Selecting a video immediately opens the player, where metadata and streams load, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right controls are Quality, Speed, Subtitles, Volume, Play queue and Fullscreen; local videos hide Quality. The play-queue sidebar lists the current video's parts as cover cards with names and durations, highlights the playing part and switches parts on click. Changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
 
 The heart on a creator card or uploaded-video page saves that creator to **Videos → Favorites**, separately from playable videos. Favorites survive restarts and participate in configured cloud sync; account cookies and login sessions remain device-local. Search preserves Bilibili's returned order without adding a local popularity or publication-date sort; mixed results show the creator section before videos.
 

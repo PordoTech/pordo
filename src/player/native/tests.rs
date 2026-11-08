@@ -383,6 +383,64 @@ fn native_media_device_recovery() {
         recovered && p.snapshot().epoch > epoch && p.position() > 0.2
     });
 }
+
+#[test]
+#[ignore = "requires staged remdia components and native video fixture"]
+fn native_media_paused_device_loss_defers_recovery_until_resume() {
+    let mut player = Player::open(fixture("av.mp4")).unwrap();
+    until(&mut player, Duration::from_secs(5), |p, _| {
+        p.position() > 0.1
+    });
+    player.set_playing(false);
+    until(&mut player, Duration::from_secs(2), |p, _| {
+        p.snapshot().state == PlaybackState::Paused
+    });
+    let attempts = player.shared.output.open_attempts.load(Ordering::Acquire);
+    player
+        .shared
+        .output
+        .simulated_open_failures
+        .store(2, Ordering::Release);
+    player.shared.output.failed.store(true, Ordering::Release);
+    until(&mut player, Duration::from_secs(2), |p, events| {
+        assert!(!events.iter().any(|e| matches!(e, Event::Warning(_))));
+        !p.snapshot().has_audio
+    });
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(
+        player.shared.output.open_attempts.load(Ordering::Acquire),
+        attempts
+    );
+    assert!(
+        !pump(&mut player)
+            .iter()
+            .any(|e| matches!(e, Event::Warning(_)))
+    );
+    player.set_playing(true);
+    let mut recovered = false;
+    until(&mut player, Duration::from_secs(6), |p, events| {
+        recovered |= events.iter().any(|e| matches!(e, Event::Recovered));
+        recovered && p.snapshot().has_audio && p.position() > 0.2
+    });
+    assert!(player.shared.output.open_attempts.load(Ordering::Acquire) >= attempts + 3);
+}
+
+#[test]
+#[ignore = "requires staged remdia components and native video fixture"]
+fn native_media_initial_audio_failure_recovers_without_reopening_video() {
+    audio::simulate_initial_failures(2);
+    let mut player = Player::open(fixture("av.mp4")).unwrap();
+    let mut recovered = false;
+    until(&mut player, Duration::from_secs(6), |p, events| {
+        assert!(!events.iter().any(|e| matches!(e, Event::Warning(_))));
+        recovered |= events.iter().any(|e| matches!(e, Event::Recovered));
+        recovered && p.snapshot().has_audio && p.position() > 0.1
+    });
+    assert_eq!(
+        player.shared.output.open_attempts.load(Ordering::Acquire),
+        3
+    );
+}
 #[test]
 #[ignore = "requires staged remdia component DLLs"]
 fn native_media_drop_interrupts_blocked_network_open() {
