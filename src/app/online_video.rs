@@ -748,6 +748,12 @@ impl App {
         let mut signout = false;
         let mut login = false;
         ui.horizontal(|ui| {
+            if self.online_video.init.is_some()
+                || self.online_video.qr_job.is_some()
+                || self.online_video.save.is_some()
+            {
+                ui.add(egui::Spinner::new().size(16.0));
+            }
             if let Some(account) = &self.online_video.account {
                 ui.label(format!("{} · UID {}", account.uname, account.mid));
             } else {
@@ -813,6 +819,9 @@ impl App {
                 });
             });
         }
+        if self.online_video.qr.is_none() && !self.online_video.auth_status.is_empty() {
+            ui.label(&self.online_video.auth_status);
+        }
         ui.separator();
         preferences::form_row(
             ui,
@@ -838,15 +847,6 @@ impl App {
                 );
             },
         );
-        if self.online_video.init.is_some()
-            || self.online_video.qr_job.is_some()
-            || self.online_video.save.is_some()
-        {
-            ui.spinner();
-        }
-        if self.online_video.qr.is_none() && !self.online_video.auth_status.is_empty() {
-            ui.label(&self.online_video.auth_status);
-        }
     }
 
     pub(super) fn online_video_contents(&mut self, ui: &mut Ui) {
