@@ -14,7 +14,9 @@ on:
 permissions:
   contents: read
 env:
-  RELEASE_SOURCE_REF: ${{ inputs.release_tag || github.ref }}
+  # PR merge refs disappear after merging; keep queued builds on the event's
+  # immutable commit (the tested merge commit for pull_request events).
+  RELEASE_SOURCE_REF: ${{ inputs.release_tag || github.sha }}
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
   RELEASE_REF: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 concurrency:
