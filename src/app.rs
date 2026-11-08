@@ -33,6 +33,7 @@ mod providers;
 mod qq;
 mod queue_drag;
 mod video_header;
+mod video_skip;
 mod window;
 mod workspace;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
@@ -86,6 +87,7 @@ pub struct App {
     online_music: online_music::State,
     online_video: online_video::State,
     danmaku: danmaku::State,
+    video_skip: video_skip::State,
     video_controls_dirty: bool,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
@@ -198,6 +200,7 @@ impl App {
             online_music: online_music::State::new(&settings.music),
             online_video: Default::default(),
             danmaku: Default::default(),
+            video_skip: Default::default(),
             video_controls_dirty: false,
             queue: Default::default(),
             queue_inactive: Default::default(),
@@ -608,6 +611,7 @@ impl eframe::App for App {
                     }
                     Event::Ended => {
                         self.playback_warning = None;
+                        self.video_skip.playback.reset_pass();
                         advance = true;
                     }
                     Event::SeekCompleted { id, .. } => {
@@ -653,6 +657,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.poll_video_skip(ctx);
         let busy = self.player.as_ref().is_some_and(|p| {
             !matches!(
                 p.snapshot().state,
@@ -1299,6 +1304,7 @@ impl App {
                 }
             }
             Act::Seek(t) => {
+                self.video_skip.manual_seek(t);
                 if let Some(job) = &self.subtitle_job {
                     job.prioritize(t);
                 }

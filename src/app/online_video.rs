@@ -117,6 +117,17 @@ impl State {
     }
 }
 impl App {
+    pub(in crate::app) fn bilibili_skip_source(&self) -> Option<(String, u64, f64)> {
+        if !self.bilibili_controls_available() {
+            return None;
+        }
+        let active = self.online_video.active.as_ref()?;
+        Some((
+            active.detail.bvid.clone(),
+            active.playback.cid,
+            active.playback.duration,
+        ))
+    }
     pub(super) fn cancel_video_discovery(&mut self) {
         if self.workspace.page == workspace::Page::Playing
             && self.player.is_none()
@@ -156,6 +167,7 @@ impl App {
         self.error = None;
         self.playback_warning = None;
         self.online_video.stop();
+        self.video_skip = Default::default();
         self.set_active_queue(false);
         self.mode = UiMode::Video;
         self.ui_kind_music = Some(false);
@@ -802,7 +814,30 @@ impl App {
             });
         }
         ui.separator();
-
+        preferences::form_row(
+            ui,
+            l.text("自动跳过片头", "Auto-skip intro"),
+            l,
+            |ui| {
+                design::toggle(
+                    ui,
+                    &mut self.preferences_draft.video.skip.intro,
+                    l.text("自动跳过片头", "Auto-skip intro"),
+                );
+            },
+        );
+        preferences::form_row(
+            ui,
+            l.text("自动跳过片尾", "Auto-skip outro"),
+            l,
+            |ui| {
+                design::toggle(
+                    ui,
+                    &mut self.preferences_draft.video.skip.outro,
+                    l.text("自动跳过片尾", "Auto-skip outro"),
+                );
+            },
+        );
         if self.online_video.init.is_some()
             || self.online_video.qr_job.is_some()
             || self.online_video.save.is_some()

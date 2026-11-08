@@ -264,6 +264,11 @@ fn account_controls_live_in_video_source_settings_not_search() {
             < settings.iter().position(|s| s == "AI subtitles").unwrap()
     );
     assert!(settings.iter().any(|s| s == "Video"));
+    for label in ["Auto-skip intro", "Auto-skip outro"] {
+        let position = settings.iter().position(|s| s == label).expect(label);
+        assert!(position > settings.iter().position(|s| s == "Bilibili").unwrap());
+        assert!(position < settings.iter().position(|s| s == "AI subtitles").unwrap());
+    }
     assert!(
         app.workspace.page != workspace::Page::Video,
         "Viewing account settings must not navigate to video search"

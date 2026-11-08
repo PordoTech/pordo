@@ -132,6 +132,188 @@ impl State {
 mod tests {
     use super::*;
 
+    fn skip_markers() -> Vec<bilibili::segments::Segment> {
+        use bilibili::segments::{Kind, Segment};
+        vec![
+            Segment {
+                kind: Kind::Intro,
+                start: 10.0,
+                end: 40.0,
+            },
+            Segment {
+                kind: Kind::Outro,
+                start: 270.0,
+                end: 300.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn timeline_marks_both_boundaries_without_intercepting_seek_clicks() {
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        app.mode = UiMode::Video;
+        app.ui_kind_music = Some(false);
+        app.source = Some(active().media_path);
+        app.online_video.active = Some(active());
+        app.video_skip =
+            crate::app::video_skip::State::seeded(("BV1GJ411x7h7".into(), 1), skip_markers());
+        let mut rail = Rect::NOTHING;
+        let mut clicked = false;
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let (rect, response) = hslider(ui, 600.0, 18.0, 0.1, 3.0, true, 1.0);
+                rail = rect;
+                app.paint_video_skip_markers(ui, rect, 300.0, 1.0);
+                clicked |= response.clicked();
+            });
+            output.textures_delta.clear();
+        }
+        let point = pos2(rail.left() + rail.width() * 25.0 / 300.0, rail.center().y);
+        let mut output = egui::FullOutput::default();
+        for pressed in [true, false] {
+            output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    let (rect, response) = hslider(ui, 600.0, 18.0, 0.1, 3.0, true, 1.0);
+                    app.paint_video_skip_markers(ui, rect, 300.0, 1.0);
+                    clicked |= response.clicked();
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert!(clicked, "OP/ED markers must not steal rail clicks");
+        let boundaries: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.width == 1.5 && (points[1].y - points[0].y).abs() == 9.0 =>
+                {
+                    Some(points[0].x)
+                }
+                _ => None,
+            })
+            .collect();
+        for time in [10.0, 40.0, 270.0, 300.0] {
+            let x = rail.left() + rail.width() * (time / 300.0) as f32;
+            assert!(
+                boundaries.iter().any(|tick| (tick - x).abs() < 0.01),
+                "missing OP/ED boundary {time}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires GPU; renders real OP/ED timeline markers without network"]
+    fn op_ed_timeline_visuals() {
+        let directory = std::path::Path::new("target/ui-review/playback");
+        std::fs::create_dir_all(directory).unwrap();
+        let mut capture = comic::visual_tests::Capture::new();
+        for (language, suffix) in [(Language::Chinese, "zh"), (Language::English, "en")] {
+            let ctx = egui::Context::default();
+            let mut app = comic::visual_tests::settings_fixture(&ctx);
+            app.settings.language = language;
+            app.mode = UiMode::Video;
+            app.ui_kind_music = Some(false);
+            app.source = Some(active().media_path);
+            app.online_video.active = Some(active());
+            app.video_skip =
+                crate::app::video_skip::State::seeded(("BV1GJ411x7h7".into(), 1), skip_markers());
+            capture.save(
+                &ctx,
+                [760, 120],
+                &directory.join(format!("op-ed-{suffix}.png")),
+                |ui| {
+                    ui.add_space(26.0);
+                    let (rail, _) = hslider(ui, 740.0, 18.0, 0.3, 3.0, false, 1.0);
+                    app.paint_video_skip_markers(ui, rail, 300.0, 1.0);
+                },
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires remdia fixtures; runs OP and ED seeks through the native player"]
+    fn native_video_auto_skips_intro_and_outro_to_eof() {
+        use bilibili::segments::{Kind, Segment};
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        let path = PathBuf::from(pordo_core::environment::var("PORDO_NATIVE_FIXTURES").unwrap())
+            .join("av.mp4");
+        let mut active = active();
+        active.media_path = path.clone();
+        active.playback.duration = 3.0;
+        app.source = Some(path.clone());
+        app.online_video.active = Some(active);
+        app.mode = UiMode::Video;
+        app.ui_kind_music = Some(false);
+        app.loading = false;
+        app.settings.video.skip = pordo_core::video_sources::SkipSettings {
+            intro: true,
+            outro: true,
+        };
+        app.video_skip = crate::app::video_skip::State::seeded(
+            ("BV1GJ411x7h7".into(), 1),
+            vec![
+                Segment {
+                    kind: Kind::Intro,
+                    start: 0.0,
+                    end: 0.6,
+                },
+                Segment {
+                    kind: Kind::Outro,
+                    start: 2.1,
+                    end: 3.0,
+                },
+            ],
+        );
+        app.player = Some(Player::open(path.to_string_lossy().into_owned()).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut targets = Vec::new();
+        let mut ended = false;
+        while Instant::now() < deadline {
+            let p = app.player.as_mut().unwrap();
+            while let Some(event) = p.poll_event() {
+                match event {
+                    Event::SeekCompleted { id, .. }
+                        if app.pending_seek.is_some_and(|(pending, _)| pending == id) =>
+                    {
+                        app.pending_seek = None
+                    }
+                    Event::Ended => ended = true,
+                    Event::Error(e) => panic!("native OP/ED playback failed: {e}"),
+                    _ => {}
+                }
+            }
+            let pos = p.position();
+            let _ = p.next_frame(pos);
+            if ended {
+                break;
+            }
+            app.poll_video_skip(&ctx);
+            if let Some((_, target)) = app.pending_seek
+                && targets.last() != Some(&target)
+            {
+                targets.push(target);
+            }
+            std::thread::sleep(Duration::from_millis(4));
+        }
+        assert!(ended, "ED skip must reach normal EOF");
+        assert_eq!(targets, vec![0.6, 3.0]);
+    }
+
     fn active() -> Active {
         Active {
             media_path: PathBuf::from("http://127.0.0.1:12345/session/video.mp4"),

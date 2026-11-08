@@ -338,6 +338,7 @@ impl App {
         if duration <= 0.0 {
             return;
         }
+        self.paint_video_skip_markers(ui, rect, duration, alpha);
         if response.dragged()
             && let Some(p) = response.interact_pointer_pos()
         {

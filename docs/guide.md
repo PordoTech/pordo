@@ -100,6 +100,10 @@ In **Settings → Video**, select **Bilibili**, choose **Sign in with QR**, scan
 
 The first version supports ordinary uploaded videos with H.264 video and AAC audio. Available qualities depend on your account and the streams Bilibili returns. Bangumi, live streams, paid courses, HDR and AV1/HEVC-only streams are not supported. If Bilibili requests security verification, follow the website prompt or sign in and retry; the app does not treat that response as an empty search. Initial seeks in long fragmented videos can take longer while the media index is read.
 
+Under **Settings → Video → Bilibili**, **Auto-skip intro** and **Auto-skip outro** independently enable OP/ED skipping; both default to off. Pordo looks up [BilibiliSponsorBlock community markers](https://github.com/hanydd/BilibiliSponsorBlock/wiki/API) using a short hash prefix, without sending Bilibili login cookies. Coverage depends on community submissions. Missing markers or lookup failures do not interrupt playback.
+
+Available OP ranges are gold and ED ranges purple on the playback timeline, even with automatic skipping disabled. Vertical ticks mark each range's start and end. Markers are matched to the current video's BV ID, part CID and duration. Seeking back into a marked range lets you watch it without another automatic skip during that playback pass. Changing quality preserves the markers; switching parts loads that part's markers.
+
 ## AI subtitles
 
 In **Settings → AI Providers**, enter a compatible service address, key and available models. Fetch the model list or add an ID manually. Select an audio-capable model under **Settings → Video → AI subtitles**; comic translation selects its model separately.
