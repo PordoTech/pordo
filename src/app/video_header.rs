@@ -24,15 +24,27 @@ impl App {
             self.navigate(workspace::Page::Video);
         }
         let open_rect = Rect::from_center_size(pos2(end - 16.0, center), Vec2::splat(32.0));
+        let danmaku = self.bilibili_controls_available();
         let title_rect = Rect::from_min_max(
             pos2(back_rect.right() + 12.0, bar.top()),
-            pos2(open_rect.left() - 12.0, bar.bottom()),
+            pos2(
+                open_rect.left() - 12.0 - if danmaku { 40.0 } else { 0.0 },
+                bar.bottom(),
+            ),
         );
         let mut title = workspace::child(root, "video-title", title_rect);
         title.multiply_opacity(alpha);
         title.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.add(egui::Label::new(RichText::new(&self.title).size(18.0).strong()).truncate());
         });
+        if danmaku {
+            let rect = Rect::from_center_size(
+                pos2(open_rect.center().x - 40.0, center),
+                Vec2::splat(28.0),
+            );
+            let mut ui = workspace::child(root, "video-header-danmaku", rect);
+            self.danmaku_button(&mut ui, alpha);
+        }
         let mut open = workspace::child(root, "video-open", open_rect);
         if design::icon_button_sized(
             &mut open,

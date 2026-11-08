@@ -9,13 +9,12 @@ impl App {
                 .as_ref()
                 .is_some_and(|active| self.source.as_ref() == Some(&active.media_path))
     }
-    pub(in crate::app) fn bilibili_parts_available(&self) -> bool {
-        self.bilibili_controls_available()
-            && self
-                .online_video
-                .active
-                .as_ref()
-                .is_some_and(|active| active.detail.parts.len() > 1)
+    pub(in crate::app) fn bilibili_queue_len(&self) -> Option<usize> {
+        self.online_video
+            .active
+            .as_ref()
+            .filter(|_| self.bilibili_controls_available())
+            .map(|active| active.detail.parts.len())
     }
 
     pub(in crate::app) fn bilibili_quality_button(&mut self, ui: &mut Ui, alpha: f32) {
@@ -57,43 +56,42 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn bilibili_parts_button(&mut self, ui: &mut Ui, alpha: f32) {
-        if !self.bilibili_parts_available() {
-            return;
-        }
-        let Some(active) = self.online_video.active.clone() else {
+    pub(in crate::app) fn bilibili_queue_contents(&mut self, ui: &mut Ui) {
+        let Some(active) = self
+            .online_video
+            .active
+            .as_ref()
+            .filter(|_| self.bilibili_controls_available())
+        else {
             return;
         };
-        let l = self.settings.language;
-        let response = design::icon_button_sized(
-            ui,
-            28.0,
-            alpha,
-            false,
-            l.text("分P", "Parts"),
-            |p, rect, color| icons::paint(p, rect, color, icons::LIST_NUMBERS),
-        );
+        let quality = active.playback.quality;
         let mut selected = None;
-        egui::Popup::menu(&response).show(|ui| {
-            ui.set_min_width(240.0);
-            ui.set_max_width(340.0);
-            ui.label(l.text("分P", "Parts"));
-            ui.separator();
-            design::scroll().max_height(280.0).show(ui, |ui| {
+        design::scroll()
+            .id_salt("bilibili-play-queue")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 for (index, part) in active.detail.parts.iter().enumerate() {
-                    let label = format!("P{} · {}", part.page, part.part);
-                    if design::menu_item(ui, index == active.part, &label)
-                        .on_hover_text(&label)
+                    if ui
+                        .push_id(part.cid, |ui| {
+                            cards::part_card(
+                                ui,
+                                &mut self.online_video.previews,
+                                part,
+                                active.detail.cover.as_deref(),
+                                index == active.part,
+                            )
+                        })
+                        .inner
                         .clicked()
                     {
                         selected = Some(index);
-                        ui.close();
                     }
                 }
             });
-        });
         if let Some(part) = selected {
-            self.change_bilibili(bilibili::DEFAULT_QUALITY, part);
+            self.change_bilibili(quality, part);
         }
     }
 
@@ -133,6 +131,188 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn skip_markers() -> Vec<bilibili::segments::Segment> {
+        use bilibili::segments::{Kind, Segment};
+        vec![
+            Segment {
+                kind: Kind::Intro,
+                start: 10.0,
+                end: 40.0,
+            },
+            Segment {
+                kind: Kind::Outro,
+                start: 270.0,
+                end: 300.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn timeline_marks_both_boundaries_without_intercepting_seek_clicks() {
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        app.mode = UiMode::Video;
+        app.ui_kind_music = Some(false);
+        app.source = Some(active().media_path);
+        app.online_video.active = Some(active());
+        app.video_skip =
+            crate::app::video_skip::State::seeded(("BV1GJ411x7h7".into(), 1), skip_markers());
+        let mut rail = Rect::NOTHING;
+        let mut clicked = false;
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let (rect, response) = hslider(ui, 600.0, 18.0, 0.1, 3.0, true, 1.0);
+                rail = rect;
+                app.paint_video_skip_markers(ui, rect, 300.0, 1.0);
+                clicked |= response.clicked();
+            });
+            output.textures_delta.clear();
+        }
+        let point = pos2(rail.left() + rail.width() * 25.0 / 300.0, rail.center().y);
+        let mut output = egui::FullOutput::default();
+        for pressed in [true, false] {
+            output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    let (rect, response) = hslider(ui, 600.0, 18.0, 0.1, 3.0, true, 1.0);
+                    app.paint_video_skip_markers(ui, rect, 300.0, 1.0);
+                    clicked |= response.clicked();
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert!(clicked, "OP/ED markers must not steal rail clicks");
+        let boundaries: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.width == 1.5 && (points[1].y - points[0].y).abs() == 9.0 =>
+                {
+                    Some(points[0].x)
+                }
+                _ => None,
+            })
+            .collect();
+        for time in [10.0, 40.0, 270.0, 300.0] {
+            let x = rail.left() + rail.width() * (time / 300.0) as f32;
+            assert!(
+                boundaries.iter().any(|tick| (tick - x).abs() < 0.01),
+                "missing OP/ED boundary {time}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires GPU; renders real OP/ED timeline markers without network"]
+    fn op_ed_timeline_visuals() {
+        let directory = std::path::Path::new("target/ui-review/playback");
+        std::fs::create_dir_all(directory).unwrap();
+        let mut capture = comic::visual_tests::Capture::new();
+        for (language, suffix) in [(Language::Chinese, "zh"), (Language::English, "en")] {
+            let ctx = egui::Context::default();
+            let mut app = comic::visual_tests::settings_fixture(&ctx);
+            app.settings.language = language;
+            app.mode = UiMode::Video;
+            app.ui_kind_music = Some(false);
+            app.source = Some(active().media_path);
+            app.online_video.active = Some(active());
+            app.video_skip =
+                crate::app::video_skip::State::seeded(("BV1GJ411x7h7".into(), 1), skip_markers());
+            capture.save(
+                &ctx,
+                [760, 120],
+                &directory.join(format!("op-ed-{suffix}.png")),
+                |ui| {
+                    ui.add_space(26.0);
+                    let (rail, _) = hslider(ui, 740.0, 18.0, 0.3, 3.0, false, 1.0);
+                    app.paint_video_skip_markers(ui, rail, 300.0, 1.0);
+                },
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires remdia fixtures; runs OP and ED seeks through the native player"]
+    fn native_video_auto_skips_intro_and_outro_to_eof() {
+        use bilibili::segments::{Kind, Segment};
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        let path = PathBuf::from(pordo_core::environment::var("PORDO_NATIVE_FIXTURES").unwrap())
+            .join("av.mp4");
+        let mut active = active();
+        active.media_path = path.clone();
+        active.playback.duration = 3.0;
+        app.source = Some(path.clone());
+        app.online_video.active = Some(active);
+        app.mode = UiMode::Video;
+        app.ui_kind_music = Some(false);
+        app.loading = false;
+        app.settings.video.skip = pordo_core::video_sources::SkipSettings {
+            intro: true,
+            outro: true,
+        };
+        app.video_skip = crate::app::video_skip::State::seeded(
+            ("BV1GJ411x7h7".into(), 1),
+            vec![
+                Segment {
+                    kind: Kind::Intro,
+                    start: 0.0,
+                    end: 0.6,
+                },
+                Segment {
+                    kind: Kind::Outro,
+                    start: 2.1,
+                    end: 3.0,
+                },
+            ],
+        );
+        app.player = Some(Player::open(path.to_string_lossy().into_owned()).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut targets = Vec::new();
+        let mut ended = false;
+        while Instant::now() < deadline {
+            let p = app.player.as_mut().unwrap();
+            while let Some(event) = p.poll_event() {
+                match event {
+                    Event::SeekCompleted { id, .. }
+                        if app.pending_seek.is_some_and(|(pending, _)| pending == id) =>
+                    {
+                        app.pending_seek = None
+                    }
+                    Event::Ended => ended = true,
+                    Event::Error(e) => panic!("native OP/ED playback failed: {e}"),
+                    _ => {}
+                }
+            }
+            let pos = p.position();
+            let _ = p.next_frame(pos);
+            if ended {
+                break;
+            }
+            app.poll_video_skip(&ctx);
+            if let Some((_, target)) = app.pending_seek
+                && targets.last() != Some(&target)
+            {
+                targets.push(target);
+            }
+            std::thread::sleep(Duration::from_millis(4));
+        }
+        assert!(ended, "ED skip must reach normal EOF");
+        assert_eq!(targets, vec![0.6, 3.0]);
+    }
 
     fn active() -> Active {
         Active {
@@ -189,7 +369,19 @@ mod tests {
             },
             |ui| {
                 let mut act = Act::None;
-                app.video_transport(ui, ui.max_rect(), 1.0, &mut act);
+                let screen = ui.max_rect();
+                app.video_header(ui, screen, 1.0, &mut act);
+                app.video_transport(ui, screen, 1.0, &mut act);
+                if app.queue_open {
+                    app.queue_sidebar(
+                        ui,
+                        Rect::from_min_max(
+                            pos2(screen.right() - 280.0, screen.top() + BAR_TOP),
+                            pos2(screen.right(), screen.bottom() - BAR_BOTTOM),
+                        ),
+                        &mut act,
+                    );
+                }
             },
         );
         output.textures_delta.clear();
@@ -221,21 +413,26 @@ mod tests {
     }
 
     #[test]
-    fn quality_and_parts_live_in_bottom_right_icon_menus_and_switch_from_the_active_session() {
+    fn quality_menu_and_queue_sidebar_switch_from_the_active_session_with_an_empty_local_queue() {
         let ctx = egui::Context::default();
         let mut app = comic::visual_tests::settings_fixture(&ctx);
         app.settings.language = Language::English;
         app.online_video.active = Some(active());
         app.source = Some(active().media_path);
         app.mode = UiMode::Video;
+        app.queue = Default::default();
         app.online_video.detail = None; // Browsing/search state must not own playback controls.
         let mut output = frame(&ctx, &mut app, vec![]);
         for _ in 0..2 {
             output = frame(&ctx, &mut app, vec![]);
         }
         let quality = text_point(&output, icons::HIGH_DEFINITION).expect("quality icon");
-        let parts = text_point(&output, icons::LIST_NUMBERS).expect("parts icon");
-        assert!(quality.x > 440.0 && parts.x > 440.0 && quality.y > 450.0 && parts.y > 450.0);
+        assert!(text_point(&output, icons::LIST_NUMBERS).is_none());
+        let speed = text_point(&output, "1.0\u{00d7}").unwrap();
+        let subtitles = text_point(&output, icons::SUBTITLES).unwrap();
+        let queue = text_point(&output, icons::QUEUE).unwrap();
+        assert!(quality.x < speed.x && speed.x < subtitles.x && subtitles.x < queue.x);
+        assert!(app.queue.items.is_empty());
         assert!(
             text_point(&output, "1080P").is_none(),
             "choices are not laid out inline"
@@ -251,9 +448,11 @@ mod tests {
             "old session remains active until replacement is ready"
         );
         output = frame(&ctx, &mut app, vec![]);
-        let parts = text_point(&output, icons::LIST_NUMBERS).unwrap();
-        output = click(&ctx, &mut app, parts);
-        let choice = text_point(&output, "P2 · Second part").expect("part menu entry");
+        let queue = text_point(&output, icons::QUEUE).unwrap();
+        output = click(&ctx, &mut app, queue);
+        assert!(app.queue_open);
+        assert_eq!(app.bilibili_queue_len(), Some(2));
+        let choice = text_point(&output, "P2 · Second part").expect("part queue entry");
         click(&ctx, &mut app, choice);
         assert_eq!(app.online_video.part, 1);
         assert!(!app.online_video.keep_position);
@@ -280,7 +479,7 @@ mod tests {
         ] {
             app.source = path.map(PathBuf::from);
             assert!(!app.bilibili_controls_available());
-            assert!(!app.bilibili_parts_available());
+            assert!(app.bilibili_queue_len().is_none());
             let output = frame(&ctx, &mut app, vec![]);
             assert!(text_point(&output, icons::HIGH_DEFINITION).is_none());
             assert!(text_point(&output, icons::LIST_NUMBERS).is_none());
@@ -288,7 +487,7 @@ mod tests {
         app.source = Some(active().media_path);
         app.mode = UiMode::Music;
         assert!(!app.bilibili_controls_available());
-        assert!(!app.bilibili_parts_available());
+        assert!(app.bilibili_queue_len().is_none());
         app.mode = UiMode::Video;
         assert!(app.bilibili_controls_available());
         app.online_video
@@ -298,7 +497,7 @@ mod tests {
             .detail
             .parts
             .truncate(1);
-        assert!(!app.bilibili_parts_available());
+        assert_eq!(app.bilibili_queue_len(), Some(1));
     }
 
     #[test]
@@ -323,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_and_danmaku_menus_replace_the_old_bottom_settings_button() {
+    fn speed_stays_in_transport_and_danmaku_moves_to_the_header() {
         let ctx = egui::Context::default();
         let mut app = comic::visual_tests::settings_fixture(&ctx);
         app.settings.language = Language::English;
@@ -332,7 +531,7 @@ mod tests {
         app.mode = UiMode::Video;
         let mut output = frame(&ctx, &mut app, vec![]);
         let speed = text_point(&output, "1.0×").expect("speed entry");
-        assert!(text_point(&output, icons::CHAT_CENTERED_TEXT).is_some());
+        assert!(text_point(&output, icons::CHAT_CENTERED_TEXT).unwrap().y < BAR_TOP);
         assert!(text_point(&output, icons::GEAR_SIX).is_none());
         output = click(&ctx, &mut app, speed);
         for _ in 0..12 {
@@ -396,6 +595,16 @@ mod tests {
             app.paint_danmaku(&ui.painter().clone(), screen, screen, 30.0);
             app.video_header(ui, screen, 1.0, &mut Act::None);
             app.video_transport(ui, screen, 1.0, &mut Act::None);
+            if app.queue_open {
+                app.queue_sidebar(
+                    ui,
+                    Rect::from_min_max(
+                        pos2(screen.right() - 280.0, BAR_TOP),
+                        pos2(screen.right(), screen.bottom() - BAR_BOTTOM),
+                    ),
+                    &mut Act::None,
+                );
+            }
             app.window_frame(ui, true);
         }
         let directory = std::path::Path::new("target/ui-review/playback");
@@ -409,6 +618,21 @@ mod tests {
                 app.workspace.page = workspace::Page::Playing;
                 app.mode = UiMode::Video;
                 app.online_video.active = Some(active());
+                let url = "https://i0.hdslb.com/bfs/archive/queue-cover-fixture.png";
+                app.online_video.active.as_mut().unwrap().detail.cover = Some(url.into());
+                let image = crate::pixels::generated(320, 180, |x, y| {
+                    if y > 90 + x / 5 {
+                        [30, 65, 65, 255]
+                    } else {
+                        [80, 135, 150, 255]
+                    }
+                });
+                let texture = ctx.load_texture(
+                    "queue-cover-fixture",
+                    egui::ColorImage::from_rgba_unmultiplied([320, 180], image.bytes()),
+                    egui::TextureOptions::LINEAR,
+                );
+                app.online_video.previews.insert_fixture(url, texture);
                 app.source = Some(active().media_path);
                 app.title = language
                     .text("沿着山路，去看远方的海", "A road to the distant sea")
@@ -456,6 +680,14 @@ mod tests {
                     &ctx,
                     [width, 700],
                     &directory.join(format!("danmaku-{suffix}-{width}.png")),
+                    |ui| draw(&mut app, ui, width),
+                );
+                egui::Popup::close_all(&ctx);
+                app.queue_open = true;
+                capture.save(
+                    &ctx,
+                    [width, 700],
+                    &directory.join(format!("queue-{suffix}-{width}.png")),
                     |ui| draw(&mut app, ui, width),
                 );
             }

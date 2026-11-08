@@ -3,6 +3,8 @@ mod audio;
 mod clock;
 #[path = "native/demux.rs"]
 mod demux;
+#[path = "native/power.rs"]
+mod power;
 #[path = "native/session.rs"]
 mod session;
 #[path = "native/split.rs"]

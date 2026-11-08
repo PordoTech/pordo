@@ -1012,6 +1012,15 @@ pub fn compact_icon_button(
 }
 
 pub fn primary_icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str) -> egui::Response {
+    primary_icon_button_loading(ui, glyph, tooltip, false)
+}
+
+pub fn primary_icon_button_loading(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    tooltip: &str,
+    loading: bool,
+) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::Vec2::splat(CONTROL_HEIGHT), egui::Sense::click());
     response.widget_info(|| {
@@ -1026,18 +1035,38 @@ pub fn primary_icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str) -> egu
         ACCENT
     };
     ui.painter().rect_filled(rect, 8, fill);
-    super::icons::paint(
-        ui.painter(),
-        egui::Rect::from_center_size(rect.center(), vec2(17.0, 17.0)),
-        BACKGROUND,
-        glyph,
-    );
+    let icon = egui::Rect::from_center_size(rect.center(), vec2(17.0, 17.0));
+    if loading {
+        egui::Spinner::new().color(BACKGROUND).paint_at(ui, icon);
+    } else {
+        super::icons::paint(ui.painter(), icon, BACKGROUND, glyph);
+    }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if tooltip.is_empty() {
         response
     } else {
         response.on_hover_text(tooltip)
     }
+}
+
+pub fn icon_button_loading(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    tooltip: &str,
+    loading: bool,
+) -> egui::Response {
+    let response = icon_button_sized(ui, CONTROL_HEIGHT, 1.0, false, tooltip, |p, r, c| {
+        if !loading {
+            super::icons::paint(p, r, c, glyph);
+        }
+    });
+    if loading {
+        egui::Spinner::new().color(ACCENT).paint_at(
+            ui,
+            egui::Rect::from_center_size(response.rect.center(), vec2(18.0, 18.0)),
+        );
+    }
+    response
 }
 
 pub fn icon_button_sized(
@@ -1246,6 +1275,39 @@ pub fn segmented_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_search_and_refresh_icons_preserve_idle_bounds() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            apply(&ctx);
+            ctx.set_pixels_per_point(scale);
+            let mut bounds = Vec::new();
+            for loading in [false, true, false] {
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    ui.horizontal(|ui| {
+                        let search = primary_icon_button_loading(
+                            ui,
+                            super::super::icons::MAGNIFYING_GLASS,
+                            "Search",
+                            loading,
+                        );
+                        let refresh = icon_button_loading(
+                            ui,
+                            super::super::icons::ARROWS_CLOCKWISE,
+                            "Refresh",
+                            loading,
+                        );
+                        bounds.push((search.rect, refresh.rect));
+                    });
+                });
+                output.textures_delta.clear();
+            }
+            assert!(bounds.iter().all(|rects| *rects == bounds[0]));
+            assert_eq!(bounds[0].0.size(), egui::Vec2::splat(CONTROL_HEIGHT));
+            assert_eq!(bounds[0].1.size(), egui::Vec2::splat(CONTROL_HEIGHT));
+        }
+    }
 
     #[test]
     fn toggle_supports_click_keyboard_and_disabled_state_without_moving() {

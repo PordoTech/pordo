@@ -14,6 +14,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 pub mod danmaku;
+pub mod segments;
 
 #[derive(Default)]
 struct PrivateJar(Jar);

@@ -406,6 +406,7 @@ impl App {
         }
     }
     pub(super) fn queue_sidebar(&mut self, root: &mut Ui, rect: Rect, act: &mut Act) {
+        let parts = self.bilibili_queue_len();
         root.painter().rect_filled(rect, 0, SURFACE);
         root.painter().line_segment(
             [rect.left_top(), rect.left_bottom()],
@@ -426,13 +427,15 @@ impl App {
                 self.queue_open = false;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, 24.0, 1.0, draw_add)
-                    .on_hover_text(self.settings.language.text("添加文件", "Add files"))
-                    .clicked()
+                if parts.is_none()
+                    && icon_button(ui, 24.0, 1.0, draw_add)
+                        .on_hover_text(self.settings.language.text("添加文件", "Add files"))
+                        .clicked()
                 {
                     *act = Act::AddFiles;
                 }
-                if !self.is_music()
+                if parts.is_none()
+                    && !self.is_music()
                     && icon_button(ui, 24.0, 1.0, draw_magnet)
                         .on_hover_text(self.settings.language.text("打开磁链", "Open magnet link"))
                         .clicked()
@@ -444,12 +447,19 @@ impl App {
                         RichText::new(self.settings.language.text("播放队列", "Play queue"))
                             .strong(),
                     );
-                    ui.label(RichText::new(self.queue.items.len().to_string()).color(MUTED));
+                    ui.label(
+                        RichText::new(parts.unwrap_or(self.queue.items.len()).to_string())
+                            .color(MUTED),
+                    );
                 });
             });
         });
         ui.separator();
-        self.queue_contents(&mut ui, act);
+        if parts.is_some() {
+            self.bilibili_queue_contents(&mut ui);
+        } else {
+            self.queue_contents(&mut ui, act);
+        }
     }
     pub(super) fn music_view(
         &mut self,

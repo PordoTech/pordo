@@ -32,12 +32,22 @@ pub(super) struct State {
 }
 
 impl App {
+    pub(super) fn visible_playback_warning(&self) -> Option<&str> {
+        if (self.player.is_some() || self.loading)
+            && !self.settings_open
+            && matches!(self.workspace.page, Page::Playing | Page::Listening)
+        {
+            self.playback_warning.as_deref()
+        } else {
+            None
+        }
+    }
     pub(super) fn navigate(&mut self, page: Page) {
         if page == Page::Settings && self.workspace.page != Page::Settings {
             self.workspace.settings_return = Some(self.workspace.page);
         }
         if page != self.workspace.page {
-            self.online_video.cancel_discovery();
+            self.cancel_video_discovery();
         }
         if page == Page::Home && self.workspace.page != Page::Home {
             self.comic.refresh_on_home(&self.settings, Instant::now());
@@ -303,25 +313,46 @@ impl App {
                 ui.small(language.text("正在打开媒体…", "Opening media…"));
             });
         }
-        if let Some(error) = self.error.clone() {
+        let warning = self.error.is_none();
+        if let Some(error) = self
+            .error
+            .clone()
+            .or_else(|| self.visible_playback_warning().map(str::to_owned))
+        {
             let r = Rect::from_min_size(
                 pos2(content.min.x + 20.0, content.max.y - 68.0),
                 vec2((content.width() - 40.0).max(160.0), 52.0),
             );
-            root.painter()
-                .rect_filled(r, 8, Color32::from_rgb(48, 28, 30));
+            root.painter().rect_filled(
+                r,
+                8,
+                if warning {
+                    Color32::from_rgb(55, 48, 30)
+                } else {
+                    Color32::from_rgb(48, 28, 30)
+                },
+            );
             root.painter().rect_stroke(
                 r,
                 8,
-                Stroke::new(1.0, Color32::from_rgb(104, 52, 56)),
+                Stroke::new(
+                    1.0,
+                    if warning {
+                        Color32::from_rgb(105, 90, 48)
+                    } else {
+                        Color32::from_rgb(104, 52, 56)
+                    },
+                ),
                 egui::StrokeKind::Inside,
             );
             let mut ui = child(root, "workspace-error", r.shrink2(vec2(14.0, 8.0)));
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(language.error(&error)).color(Color32::LIGHT_RED),
-                    )
+                    egui::Label::new(RichText::new(language.error(&error)).color(if warning {
+                        Color32::from_rgb(230, 210, 155)
+                    } else {
+                        Color32::LIGHT_RED
+                    }))
                     .truncate(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -333,7 +364,11 @@ impl App {
                     )
                     .clicked()
                     {
-                        self.error = None;
+                        if warning {
+                            self.playback_warning = None;
+                        } else {
+                            self.error = None;
+                        }
                     }
                     if self
                         .source

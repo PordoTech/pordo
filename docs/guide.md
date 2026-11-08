@@ -16,7 +16,7 @@ Open one or more files or drop them onto the window. **Add Files** or Shift-drop
 
 The app chooses music or video mode from the media tracks. Music shows available title, artist, album, cover art and lyrics. Embedded tags take priority; downloaded-track metadata fills gaps. A matching `.lrc` file can supply timed lyrics.
 
-Click the **Lyrics** icon in the playback bar, then choose **Generate AI lyrics** to transcribe a local song or a fully downloaded online track. **Show lyrics** opens the lyric view. Generation uses the audio-capable model selected under **AI Subtitles**, keeps the song's original language, and displays completed lines while generating. On successful completion, lyrics are automatically saved as a matching `.lrc` file beside the song and loaded next time. **Regenerate lyrics** replaces that file after the new generation succeeds. Cancelling, failed segments, or no recognized lyrics leave the saved file unchanged. Existing lyrics remain visible until new lines are recognized. Instrumental passages can produce no lyrics; recognition and timing depend on the selected model. Generating lyrics sends the song's audio chunks to the configured AI service.
+Click the **Lyrics** icon in the playback bar, then choose **Generate AI lyrics** to transcribe a local song or a fully downloaded online track. **Show lyrics** opens the lyric view. Generation uses the audio-capable model selected under **Settings → Video → AI subtitles**, keeps the song's original language, and displays completed lines while generating. On successful completion, lyrics are automatically saved as a matching `.lrc` file beside the song and loaded next time. **Regenerate lyrics** replaces that file after the new generation succeeds. Cancelling, failed segments, or no recognized lyrics leave the saved file unchanged. Existing lyrics remain visible until new lines are recognized. Instrumental passages can produce no lyrics; recognition and timing depend on the selected model. Generating lyrics sends the song's audio chunks to the configured AI service.
 
 Use the queue sidebar to select, remove or reorder entries. Hold an item's title before dragging to reorder. Favorites and recent activity are available from the media pages and Home. **Play all** on music favorites uses the displayed favorites, including online tracks not downloaded on this device.
 
@@ -37,6 +37,11 @@ without reopening the media. Unsaved settings remain available until saved or di
 
 Video playback offers **1.0×**, **1.25×**, **1.5×**, **2.0×** and **3.0×** in the lower-right
 speed menu. Audio pitch is preserved; the remembered video speed does not change music playback.
+While a video is playing (including seeking or buffering), Pordo requests that the operating system keep the display awake. Pausing, ending, stopping or closing playback releases that request.
+
+Music, video and comic searches show progress in the search button without adding a loading row below the input. Comic update checks keep the refresh icon's size while it spins.
+
+If a video's audio device disconnects, recovery waits while the video is paused and resumes with playback. Initial audio-output failures also retry. Audio recovery notices appear only on the current playback page.
 
 ### Online music
 
@@ -80,24 +85,28 @@ Translation is started explicitly. Cancelling stops local waiting, but an alread
 
 ## Bilibili videos (desktop)
 
-The lower-right danmaku button opens a panel with a visibility switch, quarter/half/full
+The danmaku button in the playback header opens a panel with a visibility switch, quarter/half/full
 picture coverage, opacity, font size and scrolling speed. Changes apply immediately
 and are remembered. Ordinary scrolling and top/bottom comments follow playback,
 pauses, speed changes and seeking. Comments stay within the picture and leave room
 for subtitles and controls. Animated/scripted comments and posting are not supported.
 Some videos return fewer comments without signing in; a danmaku error does not stop playback.
 
-Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Selecting a video starts playback directly, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right quality and parts icons open selection menus; changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
+Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Selecting a video immediately opens the player, where metadata and streams load, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right controls are Quality, Speed, Subtitles, Volume, Play queue and Fullscreen; local videos hide Quality. The play-queue sidebar lists the current video's parts as cover cards with names and durations, highlights the playing part and switches parts on click. Changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
 
 The heart on a creator card or uploaded-video page saves that creator to **Videos → Favorites**, separately from playable videos. Favorites survive restarts and participate in configured cloud sync; account cookies and login sessions remain device-local. Search preserves Bilibili's returned order without adding a local popularity or publication-date sort; mixed results show the creator section before videos.
 
-In **Settings → Video sources**, select **Bilibili**, choose **Sign in with QR**, scan with the official Bilibili app and confirm on your phone. The account name appears after confirmation. Sessions are saved in Windows Credential Manager or macOS Keychain, outside ordinary settings and cloud sync. **Sign out** appears while signed in and removes the locally saved session and stops Bilibili playback. Expired sessions require another scan; account-password login is not offered. Login controls are kept in settings; the video search bar uses the same layout as music search.
+In **Settings → Video**, select **Bilibili**, choose **Sign in with QR**, scan with the official Bilibili app and confirm on your phone. The account name appears after confirmation. Sessions are saved in Windows Credential Manager or macOS Keychain, outside ordinary settings and cloud sync. **Sign out** appears while signed in and removes the locally saved session and stops Bilibili playback. Expired sessions require another scan; account-password login is not offered. Login controls are kept in settings; the video search bar uses the same layout as music search.
 
 The first version supports ordinary uploaded videos with H.264 video and AAC audio. Available qualities depend on your account and the streams Bilibili returns. Bangumi, live streams, paid courses, HDR and AV1/HEVC-only streams are not supported. If Bilibili requests security verification, follow the website prompt or sign in and retry; the app does not treat that response as an empty search. Initial seeks in long fragmented videos can take longer while the media index is read.
 
+Under **Settings → Video → Bilibili**, **Auto-skip intro** and **Auto-skip outro** independently enable OP/ED skipping; both default to off. Pordo looks up [BilibiliSponsorBlock community markers](https://github.com/hanydd/BilibiliSponsorBlock/wiki/API) using a short hash prefix, without sending Bilibili login cookies. Coverage depends on community submissions. Missing markers or lookup failures do not interrupt playback.
+
+Available OP ranges are gold and ED ranges purple on the playback timeline, even with automatic skipping disabled. Vertical ticks mark each range's start and end. Markers are matched to the current video's BV ID, part CID and duration. Seeking back into a marked range lets you watch it without another automatic skip during that playback pass. Changing quality preserves the markers; switching parts loads that part's markers.
+
 ## AI subtitles
 
-In **Settings → AI Providers**, enter a compatible service address, key and available models. Fetch the model list or add an ID manually. Select an audio-capable model under **AI Subtitles**; comic translation selects its model separately.
+In **Settings → AI Providers**, enter a compatible service address, key and available models. Fetch the model list or add an ID manually. Select an audio-capable model under **Settings → Video → AI subtitles**; comic translation selects its model separately.
 
 Open a video and choose **Subtitles → Generate AI subtitles**. Completed segments appear during playback. The subtitle menu can hide, cancel or export the results. Export needed results as SRT before closing or switching media: generated subtitles are not automatically saved.
 

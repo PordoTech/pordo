@@ -33,6 +33,7 @@ mod providers;
 mod qq;
 mod queue_drag;
 mod video_header;
+mod video_skip;
 mod window;
 mod workspace;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
@@ -51,9 +52,8 @@ pub enum UiMode {
 enum PrefTab {
     General,
     Providers,
-    Subtitles,
     MusicSources,
-    VideoSources,
+    Video,
     Comics,
     Cloud,
     About,
@@ -87,6 +87,7 @@ pub struct App {
     online_music: online_music::State,
     online_video: online_video::State,
     danmaku: danmaku::State,
+    video_skip: video_skip::State,
     video_controls_dirty: bool,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
@@ -150,6 +151,7 @@ pub struct App {
     loading: bool,
     ui_kind_music: Option<bool>,
     error: Option<String>,
+    playback_warning: Option<String>,
     frames: u64,
     stats_frames: u64,
     upload_ms: f64,
@@ -198,6 +200,7 @@ impl App {
             online_music: online_music::State::new(&settings.music),
             online_video: Default::default(),
             danmaku: Default::default(),
+            video_skip: Default::default(),
             video_controls_dirty: false,
             queue: Default::default(),
             queue_inactive: Default::default(),
@@ -261,6 +264,7 @@ impl App {
             loading: false,
             ui_kind_music: None,
             error: None,
+            playback_warning: None,
             frames: 0,
             stats_frames: 0,
             upload_ms: 0.0,
@@ -463,6 +467,7 @@ impl App {
         self.pending_seek = None;
         self.scrubbing = false;
         self.error = None;
+        self.playback_warning = None;
         self.title = PathBuf::from(&path)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -604,16 +609,21 @@ impl eframe::App for App {
                             }
                         }
                     }
-                    Event::Ended => advance = true,
+                    Event::Ended => {
+                        self.playback_warning = None;
+                        self.video_skip.playback.reset_pass();
+                        advance = true;
+                    }
                     Event::SeekCompleted { id, .. } => {
                         if self.pending_seek.is_some_and(|(pending, _)| pending == id) {
                             self.pending_seek = None;
                         }
                     }
                     Event::Recovered => {
-                        self.error = None;
+                        self.playback_warning = None;
                     }
                     Event::Error(error) => {
+                        self.playback_warning = None;
                         self.loading = false;
                         if self.online_origin.is_some() {
                             online_failure = Some(error);
@@ -621,7 +631,7 @@ impl eframe::App for App {
                             self.error = Some(error);
                         }
                     }
-                    Event::Warning(error) => self.error = Some(error),
+                    Event::Warning(warning) => self.playback_warning = Some(warning),
                     _ => {}
                 }
             }
@@ -647,6 +657,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.poll_video_skip(ctx);
         let busy = self.player.as_ref().is_some_and(|p| {
             !matches!(
                 p.snapshot().state,
@@ -725,7 +736,7 @@ impl eframe::App for App {
         }
 
         let music = false;
-        let sidebar_width = if self.queue_open && !self.queue.items.is_empty() {
+        let sidebar_width = if self.queue_open {
             (screen.width() * 0.38).clamp(220.0, 340.0)
         } else {
             0.0
@@ -1067,7 +1078,12 @@ impl eframe::App for App {
         }
 
         // ---- error ----
-        if let Some(e) = self.error.clone() {
+        let warning = self.error.is_none();
+        if let Some(e) = self
+            .error
+            .clone()
+            .or_else(|| self.visible_playback_warning().map(str::to_owned))
+        {
             let qq_file = self
                 .source
                 .as_deref()
@@ -1086,7 +1102,11 @@ impl eframe::App for App {
             painter.rect_filled(
                 r_rect,
                 CornerRadius::same(6),
-                Color32::from_rgba_unmultiplied(120, 20, 20, 210),
+                if warning {
+                    Color32::from_rgb(55, 48, 30)
+                } else {
+                    Color32::from_rgba_unmultiplied(120, 20, 20, 210)
+                },
             );
             let mut rui = root.new_child(
                 UiBuilder::new()
@@ -1098,7 +1118,7 @@ impl eframe::App for App {
                 ui.label(
                     RichText::new(format!(
                         "{}: {}",
-                        language.text("错误", "Error"),
+                        language.text(if warning { "提示" } else { "错误" }, if warning { "Notice" } else { "Error" }),
                         language.error(&e)
                     ))
                     .color(Color32::WHITE)
@@ -1118,6 +1138,21 @@ impl eframe::App for App {
         self.history_notice(&ctx);
         self.update_dialog(&ctx);
         self.magnet_dialog(&ctx);
+        if self.loading && self.player.is_none() && self.workspace.page == workspace::Page::Playing
+        {
+            let center = playback_rect.center();
+            egui::Spinner::new().color(ACCENT).paint_at(
+                root,
+                Rect::from_center_size(center - vec2(0.0, 16.0), Vec2::splat(24.0)),
+            );
+            painter.text(
+                center + vec2(0.0, 16.0),
+                egui::Align2::CENTER_CENTER,
+                language.text("正在加载视频…", "Loading video…"),
+                egui::FontId::proportional(14.0),
+                MUTED,
+            );
+        }
         if let Some(player) = &self.player {
             let state = player.snapshot().state;
             if matches!(
@@ -1269,6 +1304,7 @@ impl App {
                 }
             }
             Act::Seek(t) => {
+                self.video_skip.manual_seek(t);
                 if let Some(job) = &self.subtitle_job {
                     job.prioritize(t);
                 }

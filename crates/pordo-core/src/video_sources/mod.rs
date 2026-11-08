@@ -7,6 +7,7 @@ pub struct Settings {
     pub source: String,
     pub speed: u16,
     pub danmaku: DanmakuSettings,
+    pub skip: SkipSettings,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -14,8 +15,16 @@ impl Default for Settings {
             source: "bilibili".into(),
             speed: 100,
             danmaku: Default::default(),
+            skip: Default::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SkipSettings {
+    pub intro: bool,
+    pub outro: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

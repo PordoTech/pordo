@@ -20,6 +20,9 @@ pub(super) fn run(
     events: &Sender<Event>,
 ) -> Result<()> {
     let setup = audio::open_output(s.clock.clone(), s.output.clone(), s.volume.clone());
+    if let Err(error) = &setup {
+        eprintln!("Audio output initial open: {error:#}");
+    }
     let rate = setup.as_ref().map_or(48000, |o| o.rate);
     let mut output = setup.ok();
     let demux = Demux::spawn(path, s, rate)?;
@@ -37,13 +40,8 @@ pub(super) fn run(
         }
     };
     let music = !header.has_video;
-    if header.has_audio && output.is_none() {
-        if music {
-            bail!("Unable to open audio output for music");
-        }
-        let _ = events.send(Event::Warning(
-            "audio unavailable; continuing with video".into(),
-        ));
+    if header.has_audio && output.is_none() && music {
+        bail!("Unable to open audio output for music");
     }
     let mut audio = if header.has_audio {
         output.as_ref().map(|o| AudioPipeline::new(o.rate))
@@ -71,10 +69,11 @@ pub(super) fn run(
     let mut deferred = VecDeque::new();
     let mut starving = None;
     let mut audio_fallback = false;
-    let mut reopen_due: Option<Instant> = None;
+    let mut reopen_due: Option<Instant> = (header.has_audio && output.is_none()).then(Instant::now);
     let mut reopen_deadline: Option<Instant> = None;
     let mut reopens = 0;
     let mut desired_rate = None;
+    let mut display_sleep = super::power::DisplaySleep::default();
     s.clock.reset(epoch, target, false, audio.is_some());
     while !s.stop.load(Ordering::Acquire) {
         let mut seek: Option<(u64, f64)> = None;
@@ -131,6 +130,15 @@ pub(super) fn run(
                 .context("send remdia seek")?;
         }
         if s.output.failed.swap(false, Ordering::AcqRel) {
+            if let Some(error) = s
+                .output
+                .device_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
+                eprintln!("Audio output disconnected: {error}");
+            }
             s.output.enabled.store(false, Ordering::Release);
             output = None;
             audio = None;
@@ -141,12 +149,23 @@ pub(super) fn run(
             }
             if !ended && header.has_audio && reopens < 8 {
                 reopen_due = Some(Instant::now());
-                reopen_deadline = Some(Instant::now() + Duration::from_secs(10));
+                reopen_deadline = None;
             } else if music && !ended {
                 bail!("Music audio output device failed");
             }
         }
-        if reopen_due.is_some_and(|due| Instant::now() >= due) {
+        if ended {
+            reopen_due = None;
+            reopen_deadline = None;
+        } else if !music && !s.desired_playing.load(Ordering::Acquire) {
+            // Retain the pending recovery, but spend no retry budget while paused.
+            reopen_deadline = None;
+        }
+        if !ended
+            && (music || s.desired_playing.load(Ordering::Acquire))
+            && reopen_due.is_some_and(|due| Instant::now() >= due)
+        {
+            reopen_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(10));
             reopen_due = None;
             match audio::open_output(s.clock.clone(), s.output.clone(), s.volume.clone()) {
                 Ok(out) => {
@@ -178,7 +197,8 @@ pub(super) fn run(
                 Err(_) if reopen_deadline.is_some_and(|due| Instant::now() < due) => {
                     reopen_due = Some(Instant::now() + Duration::from_millis(500))
                 }
-                Err(_) => {
+                Err(error) => {
+                    eprintln!("Audio output recovery exhausted: {error:#}");
                     reopen_deadline = None;
                     if music {
                         bail!("Audio output device failed; reconnect and reopen the track");
@@ -445,6 +465,8 @@ pub(super) fn run(
                 let _ = events.send(Event::Ended);
             }
         }
+        display_sleep
+            .update(header.has_video && !ended && s.desired_playing.load(Ordering::Acquire));
         {
             let mut snapshot = s.snapshot.lock().unwrap();
             snapshot.epoch = epoch;

@@ -50,29 +50,20 @@ impl State {
             ),
         );
         let updating = self.updates_running();
-        if updating {
-            action.centered_and_justified(|ui| {
-                ui.spinner();
-            });
-            action
-                .interact(
-                    action.max_rect(),
-                    action.id().with("progress"),
-                    Sense::hover(),
-                )
-                .on_hover_text(format!(
-                    "{} {}/{}",
-                    l.text("检查更新中", "Checking updates"),
-                    self.update_done,
-                    self.update_total
-                ));
-        } else if design::icon_button(
-            &mut action,
-            icons::ARROWS_CLOCKWISE,
-            l.text("检查收藏更新", "Check favorite comics for updates"),
-            false,
-        )
-        .clicked()
+        let tip = if updating {
+            format!(
+                "{} {}/{}",
+                l.text("检查更新中", "Checking updates"),
+                self.update_done,
+                self.update_total
+            )
+        } else {
+            l.text("检查收藏更新", "Check favorite comics for updates")
+                .into()
+        };
+        if design::icon_button_loading(&mut action, icons::ARROWS_CLOCKWISE, &tip, updating)
+            .clicked()
+            && !updating
         {
             self.begin_updates(Instant::now());
         }
@@ -93,12 +84,9 @@ impl State {
                 .iter()
                 .filter_map(|g| g.error.as_ref().map(|e| format!("{}: {e}", g.site.name)))
                 .collect();
-            if !self.search.is_empty() || !books.is_empty() || !failures.is_empty() {
+            if !books.is_empty() || !failures.is_empty() {
                 ui.horizontal(|ui| {
-                    if !self.search.is_empty() {
-                        ui.spinner();
-                        ui.small(RichText::new(l.text("正在搜索…", "Searching…")).color(MUTED));
-                    } else if !books.is_empty() {
+                    if !books.is_empty() {
                         ui.small(
                             RichText::new(format!(
                                 "{} {}",
@@ -248,19 +236,19 @@ impl State {
                 l.text("搜索漫画名称", "Search comics"),
             );
             submit = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if !self.search.is_empty() {
-                if design::icon_button(ui, icons::X, l.text("取消搜索", "Cancel search"), false)
-                    .clicked()
-                {
-                    self.search.clear();
-                }
+            let busy = !self.search.is_empty();
+            let tip = if busy {
+                l.text("取消搜索", "Cancel search")
             } else {
-                submit |= design::primary_icon_button(
-                    ui,
-                    icons::MAGNIFYING_GLASS,
-                    l.text("搜索", "Search"),
-                )
-                .clicked();
+                l.text("搜索", "Search")
+            };
+            if design::primary_icon_button_loading(ui, icons::MAGNIFYING_GLASS, tip, busy).clicked()
+            {
+                if busy {
+                    self.search.clear();
+                } else {
+                    submit = true;
+                }
             }
         });
         if submit && !self.keyword.trim().is_empty() {

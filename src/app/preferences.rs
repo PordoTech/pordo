@@ -67,24 +67,13 @@ impl App {
                 icons::SPARKLE,
             ),
             (
-                PrefTab::Subtitles,
-                "AI 字幕",
-                "AI subtitles",
-                icons::SUBTITLES,
-            ),
-            (
                 PrefTab::MusicSources,
                 "音乐相关",
                 "Music",
                 icons::MUSIC_NOTES,
             ),
             (PrefTab::Comics, "漫画相关", "Comics", icons::BOOK_OPEN),
-            (
-                PrefTab::VideoSources,
-                "视频源",
-                "Video sources",
-                icons::FILM_SLATE,
-            ),
+            (PrefTab::Video, "视频相关", "Video", icons::FILM_SLATE),
             (
                 PrefTab::Cloud,
                 "云同步",
@@ -129,9 +118,8 @@ impl App {
                         match self.preferences_tab {
                             PrefTab::General => self.preferences_general(ui),
                             PrefTab::Providers => self.preferences_providers(ui),
-                            PrefTab::Subtitles => self.preferences_subtitles(ui),
                             PrefTab::MusicSources => self.preferences_music_sources(ui),
-                            PrefTab::VideoSources => self.preferences_video_sources(ui),
+                            PrefTab::Video => self.preferences_video(ui),
                             PrefTab::Comics => self.preferences_comics(ui),
                             PrefTab::Cloud => self.preferences_cloud(ui),
                             PrefTab::About => self.about(ui, &ui.ctx().clone()),
@@ -241,7 +229,8 @@ impl App {
     fn reset_preferences(&mut self, language: Language) {
         match self.preferences_tab {
             PrefTab::General => self.preferences_draft.language = Language::Chinese,
-            PrefTab::Subtitles => {
+            PrefTab::Video => {
+                self.preferences_draft.video = Default::default();
                 let selected = self.preferences_draft.llm.selected.clone();
                 self.preferences_draft.llm = crate::settings::LlmSettings {
                     selected,
@@ -262,7 +251,6 @@ impl App {
                     ..Default::default()
                 };
             }
-            PrefTab::VideoSources => self.preferences_draft.video = Default::default(),
             PrefTab::Providers | PrefTab::Cloud | PrefTab::About => return,
         }
         self.config_message = language.text("已恢复默认值", "Defaults restored").into();
@@ -289,6 +277,13 @@ impl App {
         );
     }
 
+    fn preferences_video(&mut self, ui: &mut Ui) {
+        self.preferences_video_sources(ui);
+        ui.add_space(12.0);
+        ui.separator();
+        ui.heading(self.settings.language.text("AI 字幕", "AI subtitles"));
+        self.preferences_subtitles(ui);
+    }
     fn preferences_subtitles(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
         let settings = &mut self.preferences_draft.llm;
