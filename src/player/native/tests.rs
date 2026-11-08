@@ -34,12 +34,24 @@ fn native_media_tempo_keeps_split_video_audio_and_seek_in_sync() {
         assert_eq!(p.speed(), speed);
         p.set_playing(true);
         until(&mut p, Duration::from_secs(5), |p, _| p.position() > 0.25);
-        let start = Instant::now();
-        let position = p.position();
-        until(&mut p, Duration::from_secs(2), |_, _| {
-            start.elapsed() >= Duration::from_millis(250)
+        // The audio clock advances on simulated-device callbacks. Comparing two
+        // UI reads against polling time mixes callback age into a short window
+        // on busy CI hosts. Use the callback's coherent media/wall timestamp
+        // pair at both ends, without relaxing the speed tolerance.
+        let (_, epoch, position, start) = p.shared.clock.progress.read();
+        let mut sample = (position, start);
+        until(&mut p, Duration::from_secs(2), |p, _| {
+            let (_, current_epoch, media, wall) = p.shared.clock.progress.read();
+            assert_eq!(
+                current_epoch, epoch,
+                "speed measurement must not cross a seek"
+            );
+            sample = (media, wall);
+            wall - start >= 0.25
         });
-        let measured = (p.position() - position) / start.elapsed().as_secs_f64();
+        let elapsed = sample.1 - start;
+        let measured = (sample.0 - position) / elapsed;
+        println!("speed {speed}: measured {measured:.4} over {elapsed:.4}s");
         assert!(
             (measured - speed as f64).abs() < 0.3,
             "{speed}: measured {measured}"
