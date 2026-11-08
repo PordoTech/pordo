@@ -1,6 +1,6 @@
 [package]
 name = "pordo"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 
 [workspace]
@@ -10,7 +10,7 @@ members = ["crates/pordo-core", "crates/pordo-android"]
 default-members = [".", "crates/pordo-core"]
 
 [dependencies]
-pordo-core = { path = "crates/pordo-core", version = "0.6.2" }
+pordo-core = { path = "crates/pordo-core", version = "0.6.3" }
 anyhow = "1"
 # Share the crypto implementation already used by rustls and librqbit.
 aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
