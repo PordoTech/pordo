@@ -756,6 +756,8 @@ impl App {
             }
             if let Some(account) = &self.online_video.account {
                 ui.label(format!("{} · UID {}", account.uname, account.mid));
+            } else if self.online_video.init.is_some() {
+                ui.label(l.text("正在检查登录状态", "Checking sign-in status"));
             } else {
                 ui.label(l.text("未登录", "Not signed in"));
             }

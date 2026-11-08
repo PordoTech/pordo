@@ -255,8 +255,15 @@ fn account_controls_live_in_video_source_settings_not_search() {
             })
             .collect::<Vec<_>>()
     };
+    app.online_video.init = Some(Job::spawn(|_| std::future::pending()));
+    let pending = render(&mut app, true);
+    assert!(pending.iter().any(|s| s == "Checking sign-in status"));
+    assert!(!pending.iter().any(|s| s == "Not signed in"));
+    app.online_video.init = None;
     render(&mut app, true);
     let settings = render(&mut app, true);
+    assert!(settings.iter().any(|s| s == "Not signed in"));
+    assert!(!settings.iter().any(|s| s == "Checking sign-in status"));
     assert!(settings.iter().any(|s| s == "Sign in with QR"));
     assert!(settings.iter().any(|s| s == "Bilibili"));
     assert!(
