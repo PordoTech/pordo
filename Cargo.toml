@@ -52,7 +52,7 @@ tc_tea = { version = "0.2.1", default-features = false }
 remdia-media = []
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials", "Win32_System_Power"] }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

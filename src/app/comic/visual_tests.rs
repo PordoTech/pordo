@@ -698,7 +698,7 @@ fn ai_settings_visuals() {
             ("general", crate::app::PrefTab::General),
             ("about", crate::app::PrefTab::About),
             ("providers", crate::app::PrefTab::Providers),
-            ("subtitles", crate::app::PrefTab::Subtitles),
+            ("subtitles", crate::app::PrefTab::Video),
             ("images", crate::app::PrefTab::Comics),
             ("music", crate::app::PrefTab::MusicSources),
             ("cloud", crate::app::PrefTab::Cloud),

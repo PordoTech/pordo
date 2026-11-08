@@ -171,7 +171,7 @@ fn account_controls_live_in_video_source_settings_not_search() {
     let ctx = egui::Context::default();
     let mut app = comic::visual_tests::settings_fixture(&ctx);
     app.settings.language = Language::English;
-    app.preferences_tab = PrefTab::VideoSources;
+    app.preferences_tab = PrefTab::Video;
     app.online_video.api = Some(Arc::new(Bilibili::new(None).unwrap()));
     let render = |app: &mut App, settings: bool| {
         let mut output = ctx.run_ui(
@@ -201,6 +201,11 @@ fn account_controls_live_in_video_source_settings_not_search() {
     let settings = render(&mut app, true);
     assert!(settings.iter().any(|s| s == "Sign in with QR"));
     assert!(settings.iter().any(|s| s == "Bilibili"));
+    assert!(
+        settings.iter().position(|s| s == "Video sources").unwrap()
+            < settings.iter().position(|s| s == "AI subtitles").unwrap()
+    );
+    assert!(settings.iter().any(|s| s == "Video"));
     assert!(
         app.workspace.page != workspace::Page::Video,
         "Viewing account settings must not navigate to video search"
@@ -245,7 +250,7 @@ fn bilibili_visuals() {
         app.settings.language = language;
         app.online_video.api = Some(Arc::new(Bilibili::new(None).unwrap()));
         app.settings_open = true;
-        app.preferences_tab = PrefTab::VideoSources;
+        app.preferences_tab = PrefTab::Video;
         let qr=QrCode {url:"https://account.bilibili.com/h5/account-h5/auth/scan-web?qrcode_key=offline-layout-fixture".into(),qrcode_key:"offline-layout-fixture".into()};
         let image = qrcodegen::QrCode::encode_text(&qr.url, qrcodegen::QrCodeEcc::Medium).unwrap();
         app.online_video.qr = Some((qr, image, Instant::now()));

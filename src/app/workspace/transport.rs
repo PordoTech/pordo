@@ -295,30 +295,19 @@ impl App {
             self.queue_open = !self.queue_open;
         }
         x -= 38.0;
+        self.volume_control(root, screen, pos2(x - 14.0, cy), alpha, act);
+        x -= 38.0;
+        let mut captions = control_slot(root, "video-subtitles", pos2(x - 14.0, cy), 28.0);
+        self.subtitle_menu(&mut captions, alpha, act);
+        x -= 38.0;
+        let mut speed = control_slot(root, "video-speed", pos2(x - 20.0, cy), 40.0);
+        self.video_speed_button(&mut speed, alpha);
+        x -= 52.0;
         if self.bilibili_controls_available() {
             let mut quality =
                 control_slot(root, "video-bilibili-quality", pos2(x - 14.0, cy), 28.0);
             self.bilibili_quality_button(&mut quality, alpha);
-            x -= 36.0;
-            if self.bilibili_parts_available() {
-                let mut parts =
-                    control_slot(root, "video-bilibili-parts", pos2(x - 14.0, cy), 28.0);
-                self.bilibili_parts_button(&mut parts, alpha);
-                x -= 36.0;
-            }
         }
-        if self.bilibili_controls_available() {
-            let mut danmaku = control_slot(root, "video-danmaku", pos2(x - 14.0, cy), 28.0);
-            self.danmaku_button(&mut danmaku, alpha);
-            x -= 38.0;
-        }
-        let mut speed = control_slot(root, "video-speed", pos2(x - 20.0, cy), 40.0);
-        self.video_speed_button(&mut speed, alpha);
-        x -= 52.0;
-        let mut captions = control_slot(root, "video-subtitles", pos2(x - 14.0, cy), 28.0);
-        self.subtitle_menu(&mut captions, alpha, act);
-        x -= 38.0;
-        self.volume_control(root, screen, pos2(x - 14.0, cy), alpha, act);
         // Center the buttons between the rail's lower edge and the bar's bottom.
         let seek_y = 2.0 * cy - bar.bottom() - 1.5;
         let seek_rect =

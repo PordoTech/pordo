@@ -51,9 +51,8 @@ pub enum UiMode {
 enum PrefTab {
     General,
     Providers,
-    Subtitles,
     MusicSources,
-    VideoSources,
+    Video,
     Comics,
     Cloud,
     About,
@@ -725,7 +724,7 @@ impl eframe::App for App {
         }
 
         let music = false;
-        let sidebar_width = if self.queue_open && !self.queue.items.is_empty() {
+        let sidebar_width = if self.queue_open {
             (screen.width() * 0.38).clamp(220.0, 340.0)
         } else {
             0.0

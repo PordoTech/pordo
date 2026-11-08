@@ -391,7 +391,7 @@ impl App {
     }
     pub(super) fn poll_online_video(&mut self, ctx: &egui::Context) {
         self.online_video.previews.poll(ctx);
-        let auth_visible = self.settings_open && self.preferences_tab == PrefTab::VideoSources;
+        let auth_visible = self.settings_open && self.preferences_tab == PrefTab::Video;
         let mut resolve = false;
         let mut play = false;
         let mut pending_record = false;

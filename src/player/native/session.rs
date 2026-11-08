@@ -75,6 +75,7 @@ pub(super) fn run(
     let mut reopen_deadline: Option<Instant> = None;
     let mut reopens = 0;
     let mut desired_rate = None;
+    let mut display_sleep = super::power::DisplaySleep::default();
     s.clock.reset(epoch, target, false, audio.is_some());
     while !s.stop.load(Ordering::Acquire) {
         let mut seek: Option<(u64, f64)> = None;
@@ -445,6 +446,8 @@ pub(super) fn run(
                 let _ = events.send(Event::Ended);
             }
         }
+        display_sleep
+            .update(header.has_video && !ended && s.desired_playing.load(Ordering::Acquire));
         {
             let mut snapshot = s.snapshot.lock().unwrap();
             snapshot.epoch = epoch;
