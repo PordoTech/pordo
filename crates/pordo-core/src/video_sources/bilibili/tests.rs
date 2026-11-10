@@ -149,13 +149,33 @@ fn search_kinds_parse_uploaders_and_mixed_groups_without_losing_pagination() {
 }
 #[test]
 fn creator_uploads_use_vlist_count_and_length_fields() {
-    let value = json!({"code":0,"data":{"list":{"vlist":[{"bvid":"BV1xx411c7mD","title":"<em>upload</em>","length":"3:00","author":"UP"}]},"page":{"count":21,"ps":20}}});
+    let value = json!({"code":0,"data":{"list":{"vlist":[{"bvid":"BV1xx411c7mD","title":"<em>upload</em>","length":"3:00","author":"UP","created":1730000000}]},"page":{"count":21,"ps":20}}});
     let first = parse_uploads(&value, 1).unwrap();
     assert_eq!(first.videos[0].title, "upload");
     assert_eq!(first.videos[0].duration, "3:00");
+    assert_eq!(first.videos[0].published, Some(1730000000));
     assert!(first.has_more);
     assert!(!parse_uploads(&value, 2).unwrap().has_more);
     assert!(parse_uploads(&json!({"code":0,"data":{"v_voucher":"verify"}}), 1).is_err());
+}
+#[test]
+fn upload_creation_dates_support_numeric_strings_and_pubdate_fallbacks() {
+    for created in [json!(1730000000), json!("1730000000")] {
+        for pubdate in [Value::Null, json!(""), json!("  ")] {
+            let row = json!({"bvid":"BV1xx411c7mD","title":"upload",
+                "created":created,"pubdate":pubdate});
+            assert_eq!(
+                parse_video(&row).unwrap().unwrap().published,
+                Some(1730000000)
+            );
+        }
+    }
+    let row = json!({"bvid":"BV1xx411c7mD","title":"video",
+        "created":1700000000,"pubdate":1730000000,"published":1600000000});
+    assert_eq!(
+        parse_video(&row).unwrap().unwrap().published,
+        Some(1730000000)
+    );
 }
 #[test]
 fn verification_is_not_an_empty_successful_search() {
