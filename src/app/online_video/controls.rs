@@ -132,6 +132,46 @@ impl State {
 mod tests {
     use super::*;
 
+    #[test]
+    fn switching_to_online_music_releases_video_identity_and_pending_jobs() {
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        let api = Arc::new(Bilibili::new(None).unwrap());
+        let mut video = active();
+        let source = crate::jobs::block_on(bilibili::start(api, video.playback.clone())).unwrap();
+        video.media_path = PathBuf::from(&source.video);
+        app.source = Some(video.media_path.clone());
+        let path = "https://www.bilibili.com/video/BV1GJ411x7h7?p=1";
+        app.online_video.playing = Some(Playing {
+            path: path.into(),
+            _source: source,
+        });
+        app.online_video.active = Some(video);
+        assert_eq!(app.active_record_path(), Some(path.into()));
+        let previous_source = app.source.take();
+        assert!(
+            app.active_record_path().is_none(),
+            "an old video session cannot own another input's record"
+        );
+        app.source = previous_source;
+        app.online_video.prepare = Some(Job::spawn(|_| std::future::pending()));
+        app.online_music.preparing = Some(Job::spawn(|_| std::future::pending()));
+        let song = crate::music_sources::OnlineSong {
+            source: "offline-test".into(),
+            id: "song-a".into(),
+            title: "Song A".into(),
+            ..Default::default()
+        };
+        app.start_online_record(song.clone(), None);
+        assert_eq!(
+            app.active_record_path(),
+            Some(format!("online://{}", song.key()))
+        );
+        assert!(app.online_video.playing.is_none() && app.online_video.active.is_none());
+        assert!(app.online_video.prepare.is_none() && app.online_music.preparing.is_none());
+        app.online_music.cancel_playback();
+    }
+
     fn skip_markers() -> Vec<bilibili::segments::Segment> {
         use bilibili::segments::{Kind, Segment};
         vec![
@@ -430,8 +470,15 @@ mod tests {
         assert!(text_point(&output, icons::LIST_NUMBERS).is_none());
         let speed = text_point(&output, "1.0\u{00d7}").unwrap();
         let subtitles = text_point(&output, icons::SUBTITLES).unwrap();
+        let danmaku = text_point(&output, icons::CHAT_CENTERED_TEXT).unwrap();
         let queue = text_point(&output, icons::QUEUE).unwrap();
-        assert!(quality.x < speed.x && speed.x < subtitles.x && subtitles.x < queue.x);
+        assert!(
+            quality.x < speed.x
+                && speed.x < subtitles.x
+                && subtitles.x < danmaku.x
+                && danmaku.x < queue.x
+        );
+        assert!((subtitles.y - danmaku.y).abs() < 1.0);
         assert!(app.queue.items.is_empty());
         assert!(
             text_point(&output, "1080P").is_none(),
@@ -522,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_stays_in_transport_and_danmaku_moves_to_the_header() {
+    fn danmaku_stays_beside_subtitles_in_transport_and_opens_its_settings() {
         let ctx = egui::Context::default();
         let mut app = comic::visual_tests::settings_fixture(&ctx);
         app.settings.language = Language::English;
@@ -531,7 +578,7 @@ mod tests {
         app.mode = UiMode::Video;
         let mut output = frame(&ctx, &mut app, vec![]);
         let speed = text_point(&output, "1.0×").expect("speed entry");
-        assert!(text_point(&output, icons::CHAT_CENTERED_TEXT).unwrap().y < BAR_TOP);
+        assert!(text_point(&output, icons::CHAT_CENTERED_TEXT).unwrap().y > BAR_TOP);
         assert!(text_point(&output, icons::GEAR_SIX).is_none());
         output = click(&ctx, &mut app, speed);
         for _ in 0..12 {
@@ -572,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires GPU; captures actual player controls and danmaku using sample comments"]
+    #[ignore = "requires GPU and native fixtures; captures actual player controls and danmaku"]
     fn playback_danmaku_visuals() {
         fn draw(app: &mut App, ui: &mut Ui, width: u32) {
             let screen = ui.max_rect();
@@ -617,6 +664,15 @@ mod tests {
                 app.settings.language = language;
                 app.workspace.page = workspace::Page::Playing;
                 app.mode = UiMode::Video;
+                let fixture = PathBuf::from(
+                    pordo_core::environment::var("PORDO_NATIVE_FIXTURES")
+                        .expect("set PORDO_NATIVE_FIXTURES"),
+                )
+                .join("av.mp4");
+                let player = Player::open(fixture.to_string_lossy().into_owned()).unwrap();
+                player.set_playing(false);
+                player.set_speed(1.5);
+                app.player = Some(player);
                 app.online_video.active = Some(active());
                 let url = "https://i0.hdslb.com/bfs/archive/queue-cover-fixture.png";
                 app.online_video.active.as_mut().unwrap().detail.cover = Some(url.into());

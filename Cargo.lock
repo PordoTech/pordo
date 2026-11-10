@@ -3957,13 +3957,14 @@ dependencies = [
 
 [[package]]
 name = "pordo"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "bytemuck",
+ "chrono",
  "cpal",
  "crossbeam-channel",
  "dotenvy",
@@ -4000,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "pordo-android"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "jni 0.21.1",
@@ -4016,7 +4017,7 @@ dependencies = [
 
 [[package]]
 name = "pordo-core"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "aws-lc-rs",

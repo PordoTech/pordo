@@ -189,6 +189,8 @@ pub(super) fn results(
         &state.videos
     };
     if !videos.is_empty() {
+        let now = chrono::Local::now();
+        let show_uploader = state.creator.is_none();
         heading(ui, language.text("视频", "Videos"), videos.len(), None);
         let columns = result_columns(ui.available_width());
         let width = card_width(ui.available_width(), columns);
@@ -196,7 +198,17 @@ pub(super) fn results(
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = GAP;
                 for video in row {
-                    if video_card(ui, &mut state.previews, video, width, language).clicked() {
+                    if video_card(
+                        ui,
+                        &mut state.previews,
+                        video,
+                        width,
+                        language,
+                        show_uploader,
+                        &now,
+                    )
+                    .clicked()
+                    {
                         action = Some(Action::Video(video.bvid.clone()));
                     }
                 }
@@ -333,6 +345,7 @@ fn video_cover(
     cover: Rect,
     cover_url: Option<&str>,
     duration: &str,
+    views: Option<&str>,
     response: &Response,
 ) {
     if let Some(texture) = previews.texture(ui, cover, cover_url, false) {
@@ -347,20 +360,52 @@ fn video_cover(
             icons::FILM_SLATE,
         );
     }
-    if !duration.is_empty() {
+    if !duration.is_empty() || views.is_some() {
         let text = ui.painter().layout_no_wrap(
             duration.into(),
             FontId::proportional(11.0),
             Color32::WHITE,
         );
-        let badge = Rect::from_min_size(
-            cover.right_bottom() - text.size() - vec2(18.0, 12.0),
-            text.size() + vec2(12.0, 6.0),
+        let band = Rect::from_min_max(
+            pos2(cover.left(), cover.bottom() - 24.0),
+            cover.right_bottom(),
         );
-        ui.painter()
-            .rect_filled(badge, 4, Color32::from_black_alpha(195));
-        ui.painter()
-            .galley(badge.min + vec2(6.0, 3.0), text, Color32::WHITE);
+        ui.painter().rect_filled(
+            band,
+            CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: 8,
+                se: 8,
+            },
+            Color32::from_black_alpha(165),
+        );
+        let duration_position = pos2(
+            cover.right() - text.size().x - 6.0,
+            band.center().y - text.size().y * 0.5,
+        );
+        let count_right = if duration.is_empty() {
+            cover.right() - 6.0
+        } else {
+            duration_position.x - 10.0
+        };
+        ui.painter().galley(duration_position, text, Color32::WHITE);
+        if let Some(views) = views {
+            let icon = Rect::from_center_size(
+                pos2(cover.left() + 12.0, band.center().y),
+                vec2(12.0, 12.0),
+            );
+            icons::paint(ui.painter(), icon, Color32::WHITE, icons::PLAY);
+            lines(
+                ui,
+                views,
+                pos2(icon.right() + 4.0, band.center().y - 6.5),
+                (count_right - icon.right() - 4.0).max(1.0),
+                11.0,
+                Color32::WHITE,
+                1,
+            );
+        }
     }
     if response.hovered() || response.has_focus() {
         ui.painter()
@@ -408,6 +453,7 @@ pub(super) fn part_card(
             cover,
             cover_url,
             &fmt_time(part.duration as f64),
+            None,
             &response,
         );
         lines(
@@ -423,15 +469,17 @@ pub(super) fn part_card(
     response
 }
 
-fn video_card(
+fn video_card<Tz: chrono::TimeZone>(
     ui: &mut Ui,
     previews: &mut Previews,
     video: &bilibili::Video,
     width: f32,
     language: Language,
+    show_uploader: bool,
+    now: &chrono::DateTime<Tz>,
 ) -> Response {
     let cover_height = (width - 16.0) * 9.0 / 16.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 92.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 76.0), Sense::click());
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(&video.title);
@@ -443,12 +491,14 @@ fn video_card(
         return response;
     }
     let cover = Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(width - 16.0, cover_height));
+    let views = video.views.map(|count| compact(count, language));
     video_cover(
         ui,
         previews,
         cover,
         video.cover.as_deref(),
         &video.duration,
+        views.as_deref(),
         &response,
     );
     let x = rect.min.x + 8.0;
@@ -462,37 +512,46 @@ fn video_card(
         design::TEXT,
         2,
     );
-    lines(
-        ui,
-        &video.uploader,
-        pos2(x, y + 36.0),
-        width - 16.0,
-        11.0,
-        MUTED,
-        1,
-    );
-    let mut details = Vec::new();
-    if let Some(views) = video.views {
-        details.push(format!(
-            "{} {}",
-            compact(views, language),
-            language.text("次播放", "views")
-        ));
+    let date = video
+        .published
+        .and_then(|timestamp| age(timestamp, now, language));
+    let footer_y = y + 36.0;
+    if show_uploader && !video.uploader.is_empty() {
+        let badge = Rect::from_min_size(pos2(x, footer_y + 1.0), vec2(15.0, 11.0));
+        ui.painter()
+            .rect_stroke(badge, 3, Stroke::new(0.8, MUTED), egui::StrokeKind::Inside);
+        ui.painter().text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            "UP",
+            FontId::proportional(7.0),
+            MUTED,
+        );
+        let date_text = date.map(|date| {
+            ui.painter()
+                .layout_no_wrap(format!(" · {date}"), FontId::proportional(11.0), MUTED)
+        });
+        let author_x = badge.right() + 4.0;
+        let author_width =
+            (cover.right() - author_x - date_text.as_ref().map_or(0.0, |text| text.size().x))
+                .max(1.0);
+        let mut job = egui::text::LayoutJob::simple(
+            video.uploader.clone(),
+            FontId::proportional(11.0),
+            MUTED,
+            author_width,
+        );
+        job.wrap.max_rows = 1;
+        job.wrap.overflow_character = Some('…');
+        let author = ui.painter().layout_job(job);
+        let date_x = author_x + author.size().x;
+        ui.painter().galley(pos2(author_x, footer_y), author, MUTED);
+        if let Some(date) = date_text {
+            ui.painter().galley(pos2(date_x, footer_y), date, MUTED);
+        }
+    } else if let Some(date) = date {
+        lines(ui, &date, pos2(x, footer_y), cover.width(), 11.0, MUTED, 1);
     }
-    if let Some(date) = video.published
-        && let Some(age) = age(date, language)
-    {
-        details.push(age);
-    }
-    lines(
-        ui,
-        &details.join(" · "),
-        pos2(x, y + 53.0),
-        width - 16.0,
-        10.0,
-        MUTED,
-        1,
-    );
     response
 }
 fn creator_card(
@@ -583,35 +642,157 @@ fn creator_card(
 }
 fn compact(value: u64, language: Language) -> String {
     let (unit, suffix) = match language {
-        Language::Chinese if value >= 100_000_000 => (100_000_000.0, "亿"),
-        Language::Chinese if value >= 10_000 => (10_000.0, "万"),
-        Language::English if value >= 1_000_000 => (1_000_000.0, "M"),
-        Language::English if value >= 1_000 => (1_000.0, "K"),
+        Language::Chinese if value >= 1_000_000_000_000 => (1_000_000_000_000u128, "万亿"),
+        Language::Chinese if value >= 100_000_000 => (100_000_000u128, "亿"),
+        Language::Chinese if value >= 10_000 => (10_000u128, "万"),
+        Language::English if value >= 1_000_000_000 => (1_000_000_000u128, "B"),
+        Language::English if value >= 1_000_000 => (1_000_000u128, "M"),
+        Language::English if value >= 1_000 => (1_000u128, "K"),
         _ => return value.to_string(),
     };
-    format!(
-        "{}{suffix}",
-        format!("{:.1}", value as f64 / unit).trim_end_matches(".0")
-    )
-}
-fn age(timestamp: u64, language: Language) -> Option<String> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    let days = now.saturating_sub(timestamp) / 86400;
-    Some(if days == 0 {
-        language.text("今天", "Today").into()
-    } else if days < 365 {
-        format!("{days}{}", language.text("天前", "d ago"))
+    let tenths = u128::from(value) * 10 / unit;
+    if tenths % 10 == 0 {
+        format!("{}{suffix}", tenths / 10)
     } else {
-        format!("{}{}", days / 365, language.text("年前", "y ago"))
+        format!("{}.{}{suffix}", tenths / 10, tenths % 10)
+    }
+}
+fn age<Tz: chrono::TimeZone>(
+    timestamp: u64,
+    now: &chrono::DateTime<Tz>,
+    language: Language,
+) -> Option<String> {
+    use chrono::Datelike;
+    if timestamp == 0 {
+        return None;
+    }
+    let date = chrono::DateTime::from_timestamp(i64::try_from(timestamp).ok()?, 0)?
+        .with_timezone(&now.timezone());
+    let elapsed = now.timestamp().checked_sub(date.timestamp())?;
+    if elapsed < 0 {
+        return None;
+    }
+    Some(if elapsed <= 60 {
+        language.text("刚刚", "Just now").into()
+    } else if elapsed < 3600 {
+        format!("{}{}", elapsed / 60, language.text("分钟前", "m ago"))
+    } else if elapsed < 86400 {
+        format!("{}{}", elapsed / 3600, language.text("小时前", "h ago"))
+    } else if now.date_naive().pred_opt() == Some(date.date_naive()) {
+        language.text("昨天", "Yesterday").into()
+    } else if date.year() == now.year() {
+        date.date_naive().format("%m-%d").to_string()
+    } else {
+        date.date_naive().format("%Y-%m-%d").to_string()
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn publication_dates_follow_bilibili_relative_and_calendar_buckets() {
+        use chrono::{Duration, FixedOffset, TimeZone};
+        let zone = FixedOffset::east_opt(8 * 3600).unwrap();
+        let now = zone.with_ymd_and_hms(2026, 11, 10, 12, 0, 0).unwrap();
+        for (ago, label) in [
+            (30, "刚刚"),
+            (60, "刚刚"),
+            (61, "1分钟前"),
+            (3599, "59分钟前"),
+            (3600, "1小时前"),
+            (86399, "23小时前"),
+            (86400, "昨天"),
+            (2 * 86400, "11-08"),
+        ] {
+            assert_eq!(
+                age(
+                    (now - Duration::seconds(ago)).timestamp() as u64,
+                    &now,
+                    Language::Chinese
+                )
+                .as_deref(),
+                Some(label)
+            );
+        }
+        let old = zone.with_ymd_and_hms(2025, 12, 31, 12, 0, 0).unwrap();
+        assert_eq!(
+            age(old.timestamp() as u64, &now, Language::Chinese).as_deref(),
+            Some("2025-12-31")
+        );
+        assert!(age(0, &now, Language::Chinese).is_none());
+        assert!(
+            age(
+                (now + Duration::seconds(1)).timestamp() as u64,
+                &now,
+                Language::Chinese
+            )
+            .is_none()
+        );
+        assert!(age(u64::MAX, &now, Language::Chinese).is_none());
+        for (count, label) in [
+            (9999, "9999"),
+            (10000, "1万"),
+            (12999, "1.2万"),
+            (99_999_999, "9999.9万"),
+            (100_000_000, "1亿"),
+            (123_456_789, "1.2亿"),
+        ] {
+            assert_eq!(compact(count, Language::Chinese), label);
+        }
+    }
+
+    #[test]
+    fn video_cards_place_views_on_cover_and_hide_repeated_creator_names() {
+        use chrono::TimeZone;
+        let ctx = egui::Context::default();
+        design::apply(&ctx);
+        setup_fonts(&ctx);
+        let now = chrono::FixedOffset::east_opt(8 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(2026, 11, 10, 12, 0, 0)
+            .unwrap();
+        let video = bilibili::Video {
+            bvid: "BV1GJ411x7h7".into(),
+            title: "Video title".into(),
+            uploader: "Creator".into(),
+            duration: "02:27".into(),
+            cover: None,
+            views: Some(26_123),
+            published: Some((now - chrono::Duration::hours(7)).timestamp() as u64),
+        };
+        let mut previews = Previews::default();
+        for show in [true, false] {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                video_card(
+                    ui,
+                    &mut previews,
+                    &video,
+                    240.0,
+                    Language::Chinese,
+                    show,
+                    &now,
+                );
+            });
+            output.textures_delta.clear();
+            let text = |label: &str| {
+                output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Text(t) if t.galley.text() == label => Some(t.pos),
+                    _ => None,
+                })
+            };
+            let count = text("2.6万").expect("compact play count");
+            let title = text("Video title").unwrap();
+            assert!(count.y < title.y);
+            assert_eq!(text("Creator").is_some(), show);
+            assert_eq!(text("UP").is_some(), show);
+            let date = text(if show { " · 7小时前" } else { "7小时前" }).expect("publication time");
+            assert!(date.y > title.y);
+            if show {
+                assert!(date.x > text("Creator").unwrap().x);
+            }
+        }
+    }
     #[test]
     fn creator_favorite_click_does_not_open_uploads_and_card_click_still_does() {
         let ctx = egui::Context::default();

@@ -297,6 +297,11 @@ impl App {
         x -= 38.0;
         self.volume_control(root, screen, pos2(x - 14.0, cy), alpha, act);
         x -= 38.0;
+        if self.bilibili_controls_available() {
+            let mut danmaku = control_slot(root, "video-danmaku", pos2(x - 14.0, cy), 28.0);
+            self.danmaku_button(&mut danmaku, alpha);
+            x -= 38.0;
+        }
         let mut captions = control_slot(root, "video-subtitles", pos2(x - 14.0, cy), 28.0);
         self.subtitle_menu(&mut captions, alpha, act);
         x -= 38.0;

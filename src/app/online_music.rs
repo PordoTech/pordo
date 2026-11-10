@@ -184,6 +184,14 @@ impl App {
         online: music_sources::OnlineSong,
         resume: Option<f64>,
     ) {
+        self.update_library();
+        self.library.flush();
+        self.online_video.stop();
+        self.online_music.cancel_playback();
+        self.torrent_job = None;
+        self.pending_seek = None;
+        self.scrubbing = false;
+        self.playback_warning = None;
         if self.online_music.downloading.as_deref() == Some(&online.key()) {
             self.online_music.download = None;
             self.online_music.downloading = None;

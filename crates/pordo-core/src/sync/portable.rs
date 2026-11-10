@@ -7,7 +7,11 @@ use std::collections::BTreeMap;
 
 pub fn progress_key(key: &str) -> bool {
     key.ends_with("/progress")
-        || key.starts_with("comic/") && matches!(key.split('/').nth(2), Some("read" | "unread"))
+        || key.starts_with("comic/")
+            && matches!(
+                key.split('/').nth(2),
+                Some("read" | "unread" | "updates_seen")
+            )
 }
 
 /// Keep local reading/playback edits out of metadata-only synchronization,
@@ -133,6 +137,9 @@ pub fn capture_comics(data: &mut Snapshot, entries: &[Entry], journal: Option<&J
         );
         data.insert(format!("{prefix}/favorite"), json!(entry.favorite));
         data.insert(format!("{prefix}/favorited_at"), json!(entry.favorited_at));
+        if let Some(seen) = &entry.updates_seen {
+            data.insert(format!("{prefix}/updates_seen"), json!(seen));
+        }
         if let Some(progress) = &entry.progress {
             data.insert(
                 format!("{prefix}/progress"),
@@ -193,9 +200,13 @@ pub fn apply_comics(values: &Snapshot, existing: &[Entry]) -> Result<Vec<Entry>>
             .filter_map(|(_, v)| v.as_str().map(str::to_owned))
             .filter(|id| !entry.read.contains(id))
             .collect();
+        if let Some(seen) = values.get(&format!("{prefix}/updates_seen")) {
+            entry.updates_seen = Some(serde_json::from_value(seen.clone())?);
+        }
         entry
             .known
             .extend(entry.chapters.iter().map(|c| c.key().to_owned()));
+        entry.reconcile_updates();
         entries.push(entry);
     }
     Ok(entries)

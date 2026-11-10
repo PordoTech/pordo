@@ -134,6 +134,66 @@ async fn desktop_and_mobile_exchange_comic_progress_without_erasing_unsupported_
 }
 
 #[test]
+fn latest_chapter_acknowledgements_clear_remote_stale_notices_and_follow_read_checkpoints() {
+    use crate::comics::{Book, Chapter, UpdateSummary, library::Entry};
+    let mut entry = Entry {
+        book: Book {
+            provider: "komiic".into(),
+            site: "komiic".into(),
+            url: "https://komiic.com/comic/42".into(),
+            ..Default::default()
+        },
+        chapters: (1..=3)
+            .map(|i| Chapter {
+                id: i.to_string(),
+                name: format!("第 {i} 话"),
+                ..Default::default()
+            })
+            .collect(),
+        favorite: true,
+        summary_unread: true,
+        update_summary: Some(UpdateSummary {
+            last_chapter: "3".into(),
+            updated_at: "2026-01-03".into(),
+            ..Default::default()
+        }),
+        new_unread: ["2".into(), "3".into()].into(),
+        ..Default::default()
+    };
+    let mut baseline = Snapshot::new();
+    portable::capture_comics(&mut baseline, &[entry.clone()], None);
+    entry.mark_read("3");
+    let mut completed = Snapshot::new();
+    portable::capture_comics(&mut completed, &[entry.clone()], None);
+    let key = format!("comic/{}/updates_seen", entry.book.key());
+    assert!(completed.contains_key(&key));
+    let mut deferred = completed.clone();
+    portable::defer_progress(&mut deferred, &baseline);
+    assert!(
+        !deferred.contains_key(&key),
+        "acknowledgements wait for the same checkpoint as reading progress"
+    );
+    let old_unread = baseline
+        .iter()
+        .find(|(k, v)| k.contains("/unread/") && v.as_str() == Some("2"))
+        .unwrap();
+    completed.insert(old_unread.0.clone(), old_unread.1.clone());
+    let mut remote = entry.clone();
+    remote.updates_seen = None;
+    remote.read.clear();
+    remote.summary_unread = true;
+    remote.new_unread = ["2".into(), "3".into()].into();
+    let applied = portable::apply_comics(&completed, &[remote]).unwrap();
+    assert!(!applied[0].has_updates() && !applied[0].read.contains("2"));
+    let mut stale_reply = baseline.clone();
+    portable::preserve_local_progress(&mut stale_reply, &completed, &baseline);
+    assert_eq!(
+        stale_reply[&key], completed[&key],
+        "an in-flight older response must not erase the acknowledgement"
+    );
+}
+
+#[test]
 fn mobile_finish_preserves_inflight_edits_and_opaque_desktop_keys() {
     let song = crate::music_sources::OnlineSong {
         source: "chksz-163".into(),

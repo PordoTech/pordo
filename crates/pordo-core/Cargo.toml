@@ -2,7 +2,7 @@
 name = "pordo-core"
 # Keep in lockstep with the application version: comic/music source user agents
 # embed CARGO_PKG_VERSION and must stay identical across desktop and Android.
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
 description = "Platform-neutral pordo logic: comic/music sources, library, caches, downloads, lyrics and remdia media jobs."
 license = "MIT"

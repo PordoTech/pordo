@@ -190,6 +190,9 @@ impl App {
             data.insert(format!("{prefix}/favorited_at"), json!(record.favorited_at));
         }
         for record in &self.library.records {
+            if !record.music || crate::bilibili::video_id(&record.path).is_some() {
+                continue;
+            }
             let Some(song) = &record.online else { continue };
             let prefix = format!("song/{}", song.key());
             if !record.favorite && !tracked(&format!("{prefix}/favorite")) {
@@ -546,7 +549,11 @@ impl App {
                 .library
                 .records
                 .iter()
-                .find(|r| r.online.as_ref().is_some_and(|s| s.key() == song.key()))
+                .find(|r| {
+                    r.music
+                        && crate::bilibili::video_id(&r.path).is_none()
+                        && r.online.as_ref().is_some_and(|s| s.key() == song.key())
+                })
                 .map(|r| r.path.clone())
                 .unwrap_or_else(|| format!("online://{}", song.key()));
             self.library.bind_online(path.clone(), song);
@@ -831,6 +838,41 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-data")
             .join(uuid::Uuid::new_v4().to_string())
+    }
+    #[test]
+    fn song_sync_never_exports_video_records_or_overwrites_their_favorites() {
+        let ctx = egui::Context::default();
+        let directory = directory();
+        let mut app = app(&ctx, &directory);
+        let song = crate::music_sources::OnlineSong {
+            source: "chksz-163".into(),
+            id: "song-a".into(),
+            title: "Song A".into(),
+            ..Default::default()
+        };
+        let prefix = format!("song/{}", song.key());
+        let video = library::Record {
+            path: "https://www.bilibili.com/video/BV1GJ411x7h7?p=1".into(),
+            title: "Video".into(),
+            music: true,
+            online: Some(song.clone()),
+            favorite: true,
+            favorited_at: 42,
+            ..Default::default()
+        };
+        app.library.records.push(video.clone());
+        assert!(!app.cloud_snapshot().contains_key(&format!("{prefix}/song")));
+        let snapshot = Snapshot::from([
+            (format!("{prefix}/song"), json!(song)),
+            (format!("{prefix}/favorite"), json!(false)),
+        ]);
+        app.apply_cloud_library(&snapshot).unwrap();
+        assert!(app.library.records[0] == video);
+        assert_eq!(app.library.records.len(), 2);
+        let music = &app.library.records[1];
+        assert!(music.music && music.path.starts_with("online://") && !music.favorite);
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn creator_favorites_sync_profiles_cancellations_and_identity_without_sessions() {

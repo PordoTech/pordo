@@ -77,7 +77,10 @@ impl State {
         self.playing = None;
         self.active = None;
     }
-    pub(super) fn record_path(&self) -> Option<String> {
+    pub(super) fn record_path(&self, source: Option<&PathBuf>) -> Option<String> {
+        self.active
+            .as_ref()
+            .filter(|active| source == Some(&active.media_path))?;
         self.playing.as_ref().map(|p| p.path.clone())
     }
     pub(super) fn cancel_discovery(&mut self) {
