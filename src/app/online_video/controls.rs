@@ -132,6 +132,46 @@ impl State {
 mod tests {
     use super::*;
 
+    #[test]
+    fn switching_to_online_music_releases_video_identity_and_pending_jobs() {
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        let api = Arc::new(Bilibili::new(None).unwrap());
+        let mut video = active();
+        let source = crate::jobs::block_on(bilibili::start(api, video.playback.clone())).unwrap();
+        video.media_path = PathBuf::from(&source.video);
+        app.source = Some(video.media_path.clone());
+        let path = "https://www.bilibili.com/video/BV1GJ411x7h7?p=1";
+        app.online_video.playing = Some(Playing {
+            path: path.into(),
+            _source: source,
+        });
+        app.online_video.active = Some(video);
+        assert_eq!(app.active_record_path(), Some(path.into()));
+        let previous_source = app.source.take();
+        assert!(
+            app.active_record_path().is_none(),
+            "an old video session cannot own another input's record"
+        );
+        app.source = previous_source;
+        app.online_video.prepare = Some(Job::spawn(|_| std::future::pending()));
+        app.online_music.preparing = Some(Job::spawn(|_| std::future::pending()));
+        let song = crate::music_sources::OnlineSong {
+            source: "offline-test".into(),
+            id: "song-a".into(),
+            title: "Song A".into(),
+            ..Default::default()
+        };
+        app.start_online_record(song.clone(), None);
+        assert_eq!(
+            app.active_record_path(),
+            Some(format!("online://{}", song.key()))
+        );
+        assert!(app.online_video.playing.is_none() && app.online_video.active.is_none());
+        assert!(app.online_video.prepare.is_none() && app.online_music.preparing.is_none());
+        app.online_music.cancel_playback();
+    }
+
     fn skip_markers() -> Vec<bilibili::segments::Segment> {
         use bilibili::segments::{Kind, Segment};
         vec![

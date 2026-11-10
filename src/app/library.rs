@@ -18,6 +18,17 @@ pub(super) struct Record {
     pub video_cover: Option<String>,
 }
 impl Record {
+    fn needs_media_identity_repair(&self) -> bool {
+        crate::bilibili::video_id(&self.path).is_some() && (self.music || self.online.is_some())
+    }
+    fn normalize_media_identity(&mut self) -> bool {
+        if self.needs_media_identity_repair() {
+            self.music = false;
+            self.online = None;
+            return true;
+        }
+        false
+    }
     pub fn resume_at(&self) -> Option<f64> {
         (self.position.is_finite()
             && self.duration.is_finite()
@@ -78,7 +89,7 @@ impl Library {
         Self::open(Self::path())
     }
     pub(super) fn open(path: PathBuf) -> Self {
-        Self {
+        let mut library = Self {
             creators: std::fs::read(path.with_extension("creators.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
@@ -91,7 +102,27 @@ impl Library {
             saved: Instant::now(),
             path,
             suppressed: None,
+        };
+        if library
+            .records
+            .iter()
+            .any(Record::needs_media_identity_repair)
+        {
+            let backup = library
+                .path
+                .with_extension("json.before-video-identity-fix");
+            if !backup.exists()
+                && let Err(error) = std::fs::copy(&library.path, backup)
+            {
+                eprintln!("Cannot back up media library before identity repair: {error}");
+                return library;
+            }
+            for record in &mut library.records {
+                library.dirty |= record.normalize_media_identity();
+            }
+            library.flush();
         }
+        library
     }
     pub fn creator_favorite(&self, mid: u64) -> bool {
         self.creators
@@ -146,16 +177,18 @@ impl Library {
         }
         self.save_records()
     }
-    pub fn remember(&mut self, record: Record) {
+    pub fn remember(&mut self, mut record: Record) {
+        record.normalize_media_identity();
         if self.suppressed.as_deref() == Some(&record.path) {
             return;
         }
         if let Some(old) = self.records.iter_mut().find(|r| {
             r.path == record.path
-                || r.online
-                    .as_ref()
-                    .zip(record.online.as_ref())
-                    .is_some_and(|(a, b)| a.key() == b.key())
+                || crate::bilibili::video_id(&r.path).is_none()
+                    && r.online
+                        .as_ref()
+                        .zip(record.online.as_ref())
+                        .is_some_and(|(a, b)| a.key() == b.key())
         }) {
             let favorite = old.favorite;
             let favorited_at = old.favorited_at;
@@ -170,6 +203,7 @@ impl Library {
             if old.video_cover.is_none() {
                 old.video_cover = video_cover;
             }
+            old.normalize_media_identity();
         } else {
             self.records.push(record);
         }
@@ -180,19 +214,22 @@ impl Library {
     }
     pub fn toggle_favorite(&mut self, path: &str, title: &str, music: bool) {
         if let Some(record) = self.records.iter_mut().find(|r| r.path == path) {
+            record.normalize_media_identity();
             record.favorite = !record.favorite;
             if record.favorite {
                 record.favorited_at = favorite_time().max(record.favorited_at.saturating_add(1));
             }
         } else {
-            self.records.push(Record {
+            let mut record = Record {
                 path: path.into(),
                 title: title.into(),
                 music,
                 favorite: true,
                 favorited_at: favorite_time(),
                 ..Default::default()
-            });
+            };
+            record.normalize_media_identity();
+            self.records.push(record);
         }
         self.dirty = true;
         self.flush();
@@ -201,13 +238,17 @@ impl Library {
         self.suppressed = None;
     }
     pub fn bind_online(&mut self, path: String, song: crate::music_sources::OnlineSong) {
+        let path = if crate::bilibili::video_id(&path).is_some() {
+            format!("online://{}", song.key())
+        } else {
+            path
+        };
         let key = song.key();
-        if let Some(old) = self
-            .records
-            .iter_mut()
-            .find(|r| r.online.as_ref().is_some_and(|s| s.key() == key))
-        {
-            if old.path == path && old.online.as_ref() == Some(&song) {
+        if let Some(old) = self.records.iter_mut().find(|r| {
+            crate::bilibili::video_id(&r.path).is_none()
+                && r.online.as_ref().is_some_and(|s| s.key() == key)
+        }) {
+            if old.path == path && old.online.as_ref() == Some(&song) && old.music {
                 return;
             }
             old.path = path;
@@ -215,8 +256,10 @@ impl Library {
             old.artist = song.artist.clone();
             old.album = song.album.clone();
             old.online = Some(song);
+            old.music = true;
         } else if let Some(old) = self.records.iter_mut().find(|r| r.path == path) {
             old.online = Some(song);
+            old.music = true;
         } else {
             self.records.push(Record {
                 path,
@@ -309,7 +352,7 @@ impl Drop for Library {
 
 impl App {
     pub(super) fn active_record_path(&self) -> Option<String> {
-        if let Some(path) = self.online_video.record_path() {
+        if let Some(path) = self.online_video.record_path(self.source.as_ref()) {
             return Some(path);
         }
         if let Some(song) = &self.online_origin {
@@ -390,10 +433,12 @@ impl App {
         let video_cover = self
             .bilibili_cover_url()
             .or_else(|| previous.and_then(|r| r.video_cover.clone()));
+        let music = crate::bilibili::video_id(&path).is_none() && self.is_music();
         if previous.is_some_and(|r| {
             (r.position - position).abs() < 1.0
                 && r.title == self.title
                 && r.video_cover == video_cover
+                && r.music == music
         }) {
             return;
         }
@@ -403,7 +448,7 @@ impl App {
             title: self.title.clone(),
             artist: info.and_then(|i| i.artist.clone()).unwrap_or_default(),
             album: info.and_then(|i| i.album.clone()).unwrap_or_default(),
-            music: self.is_music(),
+            music,
             position,
             duration: player.duration(),
             played: std::time::SystemTime::now()
@@ -424,6 +469,111 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_bilibili_music_flags_are_repaired_without_losing_favorites_or_original_data() {
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("library.json");
+        let song = crate::music_sources::OnlineSong {
+            source: "chksz-163".into(),
+            id: "song-a".into(),
+            title: "Song A".into(),
+            ..Default::default()
+        };
+        let original = vec![
+            Record {
+                path: "https://www.bilibili.com/video/BV1GJ411x7h7?p=2".into(),
+                title: "Video favorite".into(),
+                music: true,
+                online: Some(song.clone()),
+                favorite: true,
+                favorited_at: 42,
+                played: 123,
+                position: 20.0,
+                duration: 300.0,
+                ..Default::default()
+            },
+            Record {
+                path: "audio-only.mp4".into(),
+                music: true,
+                favorite: true,
+                ..Default::default()
+            },
+        ];
+        let bytes = serde_json::to_vec(&original).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut library = Library::open(path.clone());
+        let repaired = &library.records[0];
+        assert!(!repaired.music && repaired.online.is_none());
+        assert!(
+            repaired.favorite
+                && repaired.favorited_at == 42
+                && repaired.played == 123
+                && repaired.position == 20.0
+        );
+        assert!(
+            library.records[1].music,
+            "an audio-only MP4 must not be reclassified by extension"
+        );
+        let backup = path.with_extension("json.before-video-identity-fix");
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        library.bind_online(original[0].path.clone(), song);
+        assert_eq!(
+            library.records.len(),
+            3,
+            "music binding must create its own identity"
+        );
+        assert_eq!(library.records[0].path, original[0].path);
+        assert!(!library.records[0].music && library.records[0].online.is_none());
+        drop(library);
+        let library = Library::open(path);
+        assert_eq!(library.records.len(), 3);
+        assert_eq!(std::fs::read(backup).unwrap(), bytes);
+        drop(library);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn video_history_updates_cannot_merge_with_online_song_favorites() {
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        let mut library = Library::open(folder.join("library.json"));
+        let song = crate::music_sources::OnlineSong {
+            source: "chksz-163".into(),
+            id: "song-a".into(),
+            ..Default::default()
+        };
+        library.bind_online("song.flac".into(), song.clone());
+        library.toggle_favorite("song.flac", "Song", true);
+        let at = library.records[0].favorited_at;
+        let video = "https://www.bilibili.com/video/BV1GJ411x7h7?p=1";
+        library.remember(Record {
+            path: video.into(),
+            title: "Video".into(),
+            music: true,
+            online: Some(song),
+            ..Default::default()
+        });
+        library.toggle_favorite(video, "Video", true);
+        assert_eq!(library.records.len(), 2);
+        assert_eq!(library.records[0].path, "song.flac");
+        assert!(
+            library.records[0].favorite
+                && library.records[0].music
+                && library.records[0].favorited_at == at
+        );
+        assert!(
+            library.records[1].favorite
+                && !library.records[1].music
+                && library.records[1].online.is_none()
+        );
+        drop(library);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 
     #[test]
     fn creator_favorites_use_uid_preserve_media_and_survive_restart_and_removal() {
