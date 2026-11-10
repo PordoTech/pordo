@@ -613,6 +613,8 @@ fn parse_video(value: &Value) -> Result<Option<Video>> {
             ("length", "duration"),
             ("pic", "cover"),
             ("play", "views"),
+            // Creator uploads use `created`; search results use `pubdate`.
+            ("created", "published"),
             ("pubdate", "published"),
         ],
     )?;
