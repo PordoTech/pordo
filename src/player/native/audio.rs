@@ -26,6 +26,17 @@ pub struct Sample {
     pub duration: f64,
 }
 
+/// Test-device observation: only PCM actually consumed, excluding scheduling
+/// gaps and underrun silence. Keep its frame count and media endpoint coherent.
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+pub struct RenderedAudio {
+    pub epoch: u64,
+    pub frames: u64,
+    pub media_end: f64,
+    pub rate: u32,
+}
+
 /// Control is read only by the callback. A generation change invalidates queued audio.
 pub struct OutputControl {
     pub epoch: AtomicU64,
@@ -39,6 +50,8 @@ pub struct OutputControl {
     pub open_attempts: AtomicU32,
     #[cfg(test)]
     pub simulated_open_failures: AtomicU32,
+    #[cfg(test)]
+    pub rendered: Mutex<RenderedAudio>,
 }
 impl OutputControl {
     pub fn new() -> Self {
@@ -54,6 +67,8 @@ impl OutputControl {
             open_attempts: AtomicU32::new(0),
             #[cfg(test)]
             simulated_open_failures: AtomicU32::new(INITIAL_OPEN_FAILURES.with(|n| n.replace(0))),
+            #[cfg(test)]
+            rendered: Mutex::new(RenderedAudio::default()),
         }
     }
 }
@@ -208,9 +223,11 @@ pub fn open_output(
             }
             if control.enabled.load(Ordering::Acquire) {
                 let mut last = None;
+                let mut produced = 0;
                 for _ in 0..due {
                     if consumer.peek().is_ok_and(|s| s.epoch == epoch) {
                         last = consumer.pop().ok();
+                        produced += 1;
                     } else {
                         break;
                     }
@@ -220,6 +237,16 @@ pub fn open_output(
                     clock
                         .progress
                         .publish(epoch, sample.pts + sample.duration, clock.wall());
+                    let mut rendered = control.rendered.lock().unwrap();
+                    if rendered.epoch != epoch {
+                        *rendered = RenderedAudio {
+                            epoch,
+                            rate,
+                            ..Default::default()
+                        };
+                    }
+                    rendered.frames += produced;
+                    rendered.media_end = sample.pts + sample.duration;
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
