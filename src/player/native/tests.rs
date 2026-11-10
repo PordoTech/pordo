@@ -33,25 +33,33 @@ fn native_media_tempo_keeps_split_video_audio_and_seek_in_sync() {
         assert!((p.position() - position).abs() < 0.02);
         assert_eq!(p.speed(), speed);
         p.set_playing(true);
-        until(&mut p, Duration::from_secs(5), |p, _| p.position() > 0.25);
-        // The audio clock advances on simulated-device callbacks. Comparing two
-        // UI reads against polling time mixes callback age into a short window
-        // on busy CI hosts. Use the callback's coherent media/wall timestamp
-        // pair at both ends, without relaxing the speed tolerance.
-        let (_, epoch, position, start) = p.shared.clock.progress.read();
-        let mut sample = (position, start);
-        until(&mut p, Duration::from_secs(2), |p, _| {
-            let (_, current_epoch, media, wall) = p.shared.clock.progress.read();
+        until(&mut p, Duration::from_secs(5), |p, _| {
+            let rendered = *p.shared.output.rendered.lock().unwrap();
+            p.position() > 0.25 && rendered.epoch == p.snapshot().epoch && rendered.rate > 0
+        });
+        // Validate media time per rendered PCM second. Host wall time also
+        // includes decoder starvation and delayed simulated-device scheduling,
+        // which makes this a CI throughput benchmark rather than a tempo check.
+        // Production clock timestamps remain unchanged, including stall freezes.
+        let start = *p.shared.output.rendered.lock().unwrap();
+        assert_eq!(start.epoch, p.snapshot().epoch);
+        let wall_start = Instant::now();
+        let mut sample = start;
+        until(&mut p, Duration::from_secs(5), |p, _| {
+            sample = *p.shared.output.rendered.lock().unwrap();
             assert_eq!(
-                current_epoch, epoch,
+                sample.epoch, start.epoch,
                 "speed measurement must not cross a seek"
             );
-            sample = (media, wall);
-            wall - start >= 0.25
+            assert_eq!(sample.rate, start.rate);
+            sample.frames - start.frames >= u64::from(start.rate) / 4
         });
-        let elapsed = sample.1 - start;
-        let measured = (sample.0 - position) / elapsed;
-        println!("speed {speed}: measured {measured:.4} over {elapsed:.4}s");
+        let elapsed = (sample.frames - start.frames) as f64 / f64::from(start.rate);
+        let measured = (sample.media_end - start.media_end) / elapsed;
+        println!(
+            "speed {speed}: measured {measured:.4} over {elapsed:.4} rendered PCM seconds ({:.4}s wall)",
+            wall_start.elapsed().as_secs_f64()
+        );
         assert!(
             (measured - speed as f64).abs() < 0.3,
             "{speed}: measured {measured}"
