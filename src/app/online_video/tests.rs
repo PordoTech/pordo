@@ -374,7 +374,10 @@ fn bilibili_visuals() {
                 duration: ["03:32", "28:16", "04:08"][index % 3].into(),
                 cover: Some(url),
                 views: Some([128600, 34500, 862000][index % 3]),
-                published: None,
+                published: Some(
+                    (chrono::Local::now() - chrono::Duration::hours([7, 48, 24 * 400][index % 3]))
+                        .timestamp() as u64,
+                ),
             });
         }
         for width in [900, 1280] {
@@ -399,6 +402,16 @@ fn bilibili_visuals() {
             |ui| app.workspace_ui(ui),
         );
         app.online_video.search = None;
+        app.online_video.creator = Some(app.online_video.uploaders[0].clone());
+        app.online_video.uploads = app.online_video.videos.clone();
+        capture.save(
+            &ctx,
+            [900, 740],
+            &directory.join(format!("uploads-{name}.png")),
+            |ui| app.workspace_ui(ui),
+        );
+        app.online_video.creator = None;
+        app.online_video.uploads.clear();
         app.online_video.searched_kind = SearchKind::Uploader;
         app.online_video.kind = SearchKind::Uploader;
         app.online_video.videos.clear();

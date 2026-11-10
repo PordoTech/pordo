@@ -280,9 +280,10 @@ impl App {
         let l = self.settings.language;
         let speed = self.player.as_ref().map_or(1.0, Player::speed);
         let label = speed_label(speed);
-        let response = design::icon_button_sized(
+        let response = design::icon_button_with_background(
             ui,
             40.0,
+            vec2(36.0, 28.0),
             alpha,
             speed != 1.0,
             l.text("播放速度", "Playback speed"),

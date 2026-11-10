@@ -11,6 +11,11 @@ pub struct Progress {
     pub fraction: f32,
     pub page_count: usize,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateSeen {
+    pub chapter: String,
+    pub directory: String,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Entry {
@@ -27,10 +32,66 @@ pub struct Entry {
     pub new_unread: HashSet<String>,
     pub update_summary: Option<UpdateSummary>,
     pub summary_unread: bool,
+    pub updates_seen: Option<UpdateSeen>,
     pub mode: Option<ReadingMode>,
     pub zoom: f32,
 }
 impl Entry {
+    fn directory_revision(&self) -> String {
+        let chapters: Vec<_> = self.chapters.iter().map(|c| (c.kind, c.key())).collect();
+        super::digest(&serde_json::to_vec(&chapters).unwrap_or_default())
+    }
+    fn is_latest(&self, key: &str) -> bool {
+        let Some(chapter) = self.chapters.iter().find(|c| c.key() == key) else {
+            return false;
+        };
+        self.chapters
+            .iter()
+            .rev()
+            .find(|c| c.kind == chapter.kind)
+            .is_some_and(|c| c.key() == key)
+    }
+    fn summary_covered(&self, summary: &UpdateSummary) -> bool {
+        [
+            (ChapterKind::Chapter, &summary.last_chapter),
+            (ChapterKind::Volume, &summary.last_volume),
+        ]
+        .into_iter()
+        .filter(|(_, serial)| !serial.is_empty())
+        .all(|(kind, serial)| {
+            self.chapters.iter().any(|c| {
+                let local = c.name.split_whitespace().nth(1).unwrap_or("");
+                c.kind == kind
+                    && (local == serial
+                        || serial
+                            .parse::<f64>()
+                            .ok()
+                            .zip(local.parse::<f64>().ok())
+                            .is_some_and(|(a, b)| a == b))
+            })
+        })
+    }
+    /// Acknowledging the newest chapter dismisses this directory's update notice
+    /// without claiming that earlier chapters were read. New directory entries or
+    /// a summary announcing an uncataloged chapter make it inapplicable.
+    pub fn reconcile_updates(&mut self) {
+        let Some(seen) = &self.updates_seen else {
+            return;
+        };
+        let summary_current = self
+            .update_summary
+            .as_ref()
+            .is_none_or(|summary| self.summary_covered(summary));
+        if summary_current
+            && self.read.contains(&seen.chapter)
+            && self.is_latest(&seen.chapter)
+            && self.directory_revision() == seen.directory
+        {
+            self.summary_unread = false;
+            self.new_unread.clear();
+            self.check_error = None;
+        }
+    }
     pub fn has_updates(&self) -> bool {
         self.summary_unread || !self.new_unread.is_empty()
     }
@@ -45,29 +106,13 @@ impl Entry {
         }
         let changed = match &self.update_summary {
             Some(old) => old != &summary,
-            None => [
-                (ChapterKind::Chapter, &summary.last_chapter),
-                (ChapterKind::Volume, &summary.last_volume),
-            ]
-            .into_iter()
-            .filter(|(_, serial)| !serial.is_empty())
-            .any(|(kind, serial)| {
-                !self.chapters.iter().any(|c| {
-                    let local = c.name.split_whitespace().nth(1).unwrap_or("");
-                    c.kind == kind
-                        && (local == serial
-                            || serial
-                                .parse::<f64>()
-                                .ok()
-                                .zip(local.parse::<f64>().ok())
-                                .is_some_and(|(a, b)| a == b))
-                })
-            }),
+            None => !self.summary_covered(&summary),
         };
         self.summary_unread |= self.favorite && changed;
         self.update_summary = Some(summary);
         self.checked = now();
         self.check_error = None;
+        self.reconcile_updates();
     }
     pub fn refresh(&mut self, detail: Detail) {
         if let Some(summary) = &detail.summary
@@ -132,6 +177,7 @@ impl Entry {
         self.chapters = detail.chapters;
         self.checked = now();
         self.check_error = None;
+        self.reconcile_updates();
     }
     pub fn set_favorite(&mut self, favorite: bool) {
         if favorite && !self.favorite {
@@ -153,6 +199,18 @@ impl Entry {
     pub fn mark_read(&mut self, chapter: &str) {
         self.read.insert(chapter.into());
         self.new_unread.remove(chapter);
+        if self.is_latest(chapter)
+            && self
+                .update_summary
+                .as_ref()
+                .is_none_or(|summary| self.summary_covered(summary))
+        {
+            self.updates_seen = Some(UpdateSeen {
+                chapter: chapter.into(),
+                directory: self.directory_revision(),
+            });
+        }
+        self.reconcile_updates();
     }
 }
 pub struct Library {
@@ -227,6 +285,86 @@ mod tests {
             name: format!("第 {serial} 话"),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn finishing_latest_dismisses_older_update_notices_without_marking_older_chapters_read() {
+        let mut entry = Entry {
+            favorite: true,
+            chapters: vec![
+                chapter("one", "1"),
+                chapter("two", "2"),
+                chapter("three", "3"),
+            ],
+            update_summary: Some(summary("3", "2026-01-03")),
+            summary_unread: true,
+            new_unread: HashSet::from(["two".into(), "three".into()]),
+            ..Default::default()
+        };
+        entry
+            .known
+            .extend(entry.chapters.iter().map(|c| c.key().to_owned()));
+        entry.mark_read("one");
+        assert!(
+            entry.has_updates(),
+            "an older chapter does not dismiss newer updates"
+        );
+        entry.mark_read("three");
+        assert!(!entry.has_updates());
+        assert!(!entry.read.contains("two"), "unread history is preserved");
+        let mut restored: Entry =
+            serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+        restored.refresh_summary(summary("3", "2026-01-03"));
+        assert!(
+            !restored.has_updates(),
+            "the same summary cannot resurrect the notice after restart"
+        );
+        restored.refresh_summary(summary("4", "2026-01-04"));
+        assert!(
+            restored.has_updates(),
+            "a summary for an unseen chapter must show again"
+        );
+        restored.mark_read("three");
+        assert!(
+            restored.has_updates(),
+            "finishing a stale directory's tail must not acknowledge chapter four"
+        );
+        restored.refresh(Detail {
+            book: restored.book.clone(),
+            chapters: vec![
+                chapter("one", "1"),
+                chapter("two", "2"),
+                chapter("three", "3"),
+                chapter("four", "4"),
+            ],
+            summary: Some(summary("4", "2026-01-04")),
+        });
+        assert!(restored.new_unread.contains("four"));
+        restored.mark_read("four");
+        assert!(!restored.has_updates() && !restored.read.contains("two"));
+    }
+
+    #[test]
+    fn newest_volume_can_dismiss_updates_and_later_directory_additions_still_show() {
+        let mut volume = chapter("vol-1", "1");
+        volume.kind = ChapterKind::Volume;
+        let mut entry = Entry {
+            favorite: true,
+            chapters: vec![chapter("one", "1"), volume.clone()],
+            new_unread: HashSet::from(["one".into(), "vol-1".into()]),
+            ..Default::default()
+        };
+        entry
+            .known
+            .extend(entry.chapters.iter().map(|c| c.key().to_owned()));
+        entry.mark_read("vol-1");
+        assert!(!entry.has_updates() && !entry.read.contains("one"));
+        entry.refresh(Detail {
+            book: entry.book.clone(),
+            chapters: vec![chapter("one", "1"), chapter("two", "2"), volume],
+            summary: None,
+        });
+        assert!(entry.has_updates() && entry.new_unread.contains("two"));
     }
 
     #[test]

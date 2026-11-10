@@ -73,6 +73,8 @@ Favorite updates are checked at startup and when returning home, at least 15 min
 
 Choose vertical scrolling, left-to-right or right-to-left pages. Zoom, page position and reading progress are saved. The chapter button opens the chapter list; the page slider and previous/next controls navigate within the book. A new favorite starts with the existing chapter list as its baseline; later unread additions produce update indicators.
 
+Finishing the latest chapter or volume dismisses that comic's current update notice, even if earlier chapters remain unread. Earlier chapters keep their actual read/unread status. New chapters make the comic appear in Updates again. The dismissal is saved and follows reading-progress cloud sync.
+
 Original pages and covers are cached. Clearing these caches in Settings preserves translations, favorites and history. Previously cached pages may remain readable when a source is unavailable or its image quota is exhausted. Some upstream sources require adapter updates or are unsupported.
 
 ### Translate comic pages
@@ -85,14 +87,14 @@ Translation is started explicitly. Cancelling stops local waiting, but an alread
 
 ## Bilibili videos (desktop)
 
-The danmaku button in the playback header opens a panel with a visibility switch, quarter/half/full
+The danmaku button to the right of Subtitles opens a panel with a visibility switch, quarter/half/full
 picture coverage, opacity, font size and scrolling speed. Changes apply immediately
 and are remembered. Ordinary scrolling and top/bottom comments follow playback,
 pauses, speed changes and seeking. Comments stay within the picture and leave room
 for subtitles and controls. Animated/scripted comments and posting are not supported.
 Some videos return fewer comments without signing in; a danmaku error does not stop playback.
 
-Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Selecting a video immediately opens the player, where metadata and streams load, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right controls are Quality, Speed, Subtitles, Volume, Play queue and Fullscreen; local videos hide Quality. The play-queue sidebar lists the current video's parts as cover cards with names and durations, highlights the playing part and switches parts on click. Changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
+Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Video covers show play counts at the lower left and duration at the lower right. Search cards show the UP name and publication time below the title; a creator's upload list omits the repeated UP name. Recent publication times use relative labels, older dates use month/day within the current year and a full date in earlier years. Selecting a video immediately opens the player, where metadata and streams load, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right controls are Quality, Speed, Subtitles, Danmaku, Volume, Play queue and Fullscreen; local videos hide Quality and Danmaku. The play-queue sidebar lists the current video's parts as cover cards with names and durations, highlights the playing part and switches parts on click. Changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
 
 The heart on a creator card or uploaded-video page saves that creator to **Videos → Favorites**, separately from playable videos. Favorites survive restarts and participate in configured cloud sync; account cookies and login sessions remain device-local. Search preserves Bilibili's returned order without adding a local popularity or publication-date sort; mixed results show the creator section before videos.
 

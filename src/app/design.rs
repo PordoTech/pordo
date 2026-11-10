@@ -1077,12 +1077,33 @@ pub fn icon_button_sized(
     tooltip: &str,
     draw: impl FnOnce(&egui::Painter, egui::Rect, Color32),
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+    icon_button_with_background(
+        ui,
+        size,
+        egui::Vec2::splat(size),
+        alpha,
+        active,
+        tooltip,
+        draw,
+    )
+}
+
+pub fn icon_button_with_background(
+    ui: &mut egui::Ui,
+    size: f32,
+    background: egui::Vec2,
+    alpha: f32,
+    active: bool,
+    tooltip: &str,
+    draw: impl FnOnce(&egui::Painter, egui::Rect, Color32),
+) -> egui::Response {
+    let (hit, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+    let rect = egui::Rect::from_center_size(hit.center(), background);
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, tooltip)
     });
     let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
-    let radius = if size >= 34.0 { 8 } else { 6 };
+    let radius = if background.y >= 34.0 { 8 } else { 6 };
     if active {
         ui.painter()
             .rect_filled(rect, radius, SELECTED.gamma_multiply(alpha));

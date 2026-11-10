@@ -15,6 +15,8 @@ anyhow = "1"
 # Share the crypto implementation already used by rustls and librqbit.
 aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
 bytemuck = "1.25.2"
+# Already supplied by librqbit; reuse its clock support for local publication dates.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 # Select native GPU backends below instead of enabling wgpu's default set.
