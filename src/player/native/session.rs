@@ -4,6 +4,10 @@ use super::{
     audio::{self, AudioPipeline},
     demux::{Demux, Message, Seek},
 };
+#[path = "recovery.rs"]
+mod recovery;
+use recovery::Recovery;
+
 use anyhow::{Context, Result, bail};
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use std::{
@@ -40,9 +44,6 @@ pub(super) fn run(
         }
     };
     let music = !header.has_video;
-    if header.has_audio && output.is_none() && music {
-        bail!("Unable to open audio output for music");
-    }
     let mut audio = if header.has_audio {
         output.as_ref().map(|o| AudioPipeline::new(o.rate))
     } else {
@@ -69,9 +70,9 @@ pub(super) fn run(
     let mut deferred = VecDeque::new();
     let mut starving = None;
     let mut audio_fallback = false;
-    let mut reopen_due: Option<Instant> = (header.has_audio && output.is_none()).then(Instant::now);
-    let mut reopen_deadline: Option<Instant> = None;
-    let mut reopens = 0;
+    let mut recovery = Recovery::initial(header.has_audio && output.is_none(), Instant::now());
+    #[cfg(any(windows, test))]
+    let mut device_probe = Instant::now() + Duration::from_millis(500);
     let mut desired_rate = None;
     let mut display_sleep = super::power::DisplaySleep::default();
     s.clock.reset(epoch, target, false, audio.is_some());
@@ -85,7 +86,7 @@ pub(super) fn run(
                     seek = Some((id, target));
                 }
                 Command::Playing(playing) if !seeking && !ended && !buffering => {
-                    s.clock.set_playing(playing);
+                    s.clock.set_playing(playing && (!music || audio.is_some()));
                     s.output.enabled.store(
                         playing && audio.is_some() && !audio_finished && !audio_fallback,
                         Ordering::Release,
@@ -129,6 +130,19 @@ pub(super) fn run(
                 })
                 .context("send remdia seek")?;
         }
+        // Concrete WASAPI endpoints avoid CPAL's default-device activation bug.
+        // Follow default changes here, on the playback thread, even when the old
+        // endpoint remains available (e.g. inserting headphones beside speakers).
+        #[cfg(any(windows, test))]
+        if !ended && Instant::now() >= device_probe {
+            device_probe = Instant::now() + Duration::from_millis(500);
+            if output
+                .as_ref()
+                .is_some_and(|out| out.default_changed(&s.output))
+            {
+                s.output.failed.store(true, Ordering::Release);
+            }
+        }
         if s.output.failed.swap(false, Ordering::AcqRel) {
             if let Some(error) = s
                 .output
@@ -147,33 +161,29 @@ pub(super) fn run(
             } else {
                 s.clock.use_wall_clock();
             }
-            if !ended && header.has_audio && reopens < 8 {
-                reopen_due = Some(Instant::now());
-                reopen_deadline = None;
-            } else if music && !ended {
-                bail!("Music audio output device failed");
+            if !ended && header.has_audio {
+                recovery.disconnected(Instant::now());
             }
         }
         if ended {
-            reopen_due = None;
-            reopen_deadline = None;
-        } else if !music && !s.desired_playing.load(Ordering::Acquire) {
-            // Retain the pending recovery, but spend no retry budget while paused.
-            reopen_deadline = None;
+            recovery.clear();
         }
         if !ended
-            && (music || s.desired_playing.load(Ordering::Acquire))
-            && reopen_due.is_some_and(|due| Instant::now() >= due)
+            && recovery.ready(
+                Instant::now(),
+                music || s.desired_playing.load(Ordering::Acquire),
+            )
         {
-            reopen_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(10));
-            reopen_due = None;
             match audio::open_output(s.clock.clone(), s.output.clone(), s.volume.clone()) {
                 Ok(out) => {
                     desired_rate = Some(out.rate);
                     audio = Some(AudioPipeline::new(out.rate));
                     output = Some(out);
-                    reopens += 1;
-                    reopen_deadline = None;
+                    recovery.clear();
+                    #[cfg(any(windows, test))]
+                    {
+                        device_probe = Instant::now() + Duration::from_millis(500);
+                    }
                     // A device reset must not supersede a pending user's target.
                     // Allocate under the same lock as Player::seek so a newer
                     // user command always wins, regardless of queue order.
@@ -193,20 +203,20 @@ pub(super) fn run(
                         target: position,
                     });
                     let _ = events.send(Event::Recovered);
-                }
-                Err(_) if reopen_deadline.is_some_and(|due| Instant::now() < due) => {
-                    reopen_due = Some(Instant::now() + Duration::from_millis(500))
+                    // Apply the new generation/rate before consuming any more
+                    // decoder output. Otherwise old-rate PCM still queued under
+                    // the previous epoch is appended to the new-rate pipeline.
+                    continue;
                 }
                 Err(error) => {
-                    eprintln!("Audio output recovery exhausted: {error:#}");
-                    reopen_deadline = None;
-                    if music {
-                        bail!("Audio output device failed; reconnect and reopen the track");
+                    if recovery.failed(Instant::now()) {
+                        eprintln!("Audio output still unavailable, retrying: {error:#}");
+                        let _ = events.send(Event::Warning(if music {
+                            "audio device unavailable; waiting for an output device".into()
+                        } else {
+                            "audio device unavailable; continuing with video and retrying".into()
+                        }));
                     }
-                    s.snapshot.lock().unwrap().has_audio = false;
-                    let _ = events.send(Event::Warning(
-                        "audio device unavailable; continuing with video".into(),
-                    ));
                 }
             }
         }
@@ -223,7 +233,8 @@ pub(super) fn run(
             a.pending.len() < out.rate as usize / 2 && out.producer.slots() > out.capacity / 4
         });
         let wants_video = header.has_video && video_end <= now + 0.5;
-        if !ended && (seeking || wants_audio || wants_video || eof) {
+        if !ended && (!music || output.is_some()) && (seeking || wants_audio || wants_video || eof)
+        {
             for _ in 0..32 {
                 // Backpressure future frames instead of throwing them away to
                 // decode half a second ahead. At 60fps the old eight-frame cap
@@ -381,9 +392,15 @@ pub(super) fn run(
             0.0
         };
         let video_ready = !header.has_video || video_end > target + cushion || eof;
-        let audio_ready = audio
-            .as_ref()
-            .is_none_or(|a| a.end > target + cushion || eof);
+        let audio_ready = if music && header.has_audio {
+            audio
+                .as_ref()
+                .is_some_and(|a| a.end > target + cushion || eof)
+        } else {
+            audio
+                .as_ref()
+                .is_none_or(|a| a.end > target + cushion || eof)
+        };
         if seeking
             && ack
             && video_ready
@@ -393,7 +410,7 @@ pub(super) fn run(
             seeking = false;
             let active_audio = audio.as_ref().is_some_and(|a| a.end > target);
             audio_fallback = audio.is_some() && !active_audio;
-            let playing = s.desired_playing.load(Ordering::Acquire);
+            let playing = s.desired_playing.load(Ordering::Acquire) && (!music || active_audio);
             s.clock.reset(epoch, target, playing, active_audio);
             s.output
                 .enabled
@@ -439,7 +456,7 @@ pub(super) fn run(
             s.clock.set_playing(false);
             s.output.enabled.store(false, Ordering::Release);
         }
-        if eof && !seeking && !ended {
+        if eof && !seeking && !ended && !(music && recovery.waiting()) {
             audio_finished = audio.as_ref().zip(output.as_ref()).is_none_or(|(a, out)| {
                 a.pending.is_empty()
                     && out.producer.slots() == out.capacity
@@ -477,7 +494,7 @@ pub(super) fn run(
                 PlaybackState::Ended
             } else if !s.desired_playing.load(Ordering::Acquire) {
                 PlaybackState::Paused
-            } else if buffering {
+            } else if buffering || (music && recovery.waiting()) {
                 PlaybackState::Buffering
             } else if eof {
                 PlaybackState::Draining

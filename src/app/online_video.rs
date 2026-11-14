@@ -9,6 +9,8 @@ use crate::{
 };
 mod cards;
 mod controls;
+mod updates;
+mod updates_ui;
 
 #[derive(Clone)]
 struct Active {
@@ -32,6 +34,7 @@ struct Playing {
 
 #[derive(Default)]
 pub(super) struct State {
+    pub(in crate::app) updates: updates::State,
     api: Option<Arc<Bilibili>>,
     account: Option<Account>,
     init: Option<Job<(Arc<Bilibili>, Option<Account>)>>,
@@ -204,6 +207,8 @@ impl App {
     fn toggle_creator_favorite(&mut self, creator: &Uploader) {
         if let Err(error) = self.library.toggle_creator(creator) {
             self.error = Some(error.to_string());
+        } else if self.settings.video.check_updates {
+            self.queue_video_updates(false, None);
         }
     }
     fn open_bilibili_creator(&mut self, creator: Uploader) {
@@ -747,6 +752,18 @@ impl App {
                     );
                 });
         });
+        preferences::form_row(
+            ui,
+            l.text("自动检查收藏 UP 主更新", "Check creator updates"),
+            l,
+            |ui| {
+                design::toggle(
+                    ui,
+                    &mut self.preferences_draft.video.check_updates,
+                    l.text("自动检查收藏 UP 主更新", "Check creator updates"),
+                );
+            },
+        );
         ui.separator();
         let mut signout = false;
         let mut login = false;
@@ -950,9 +967,18 @@ impl App {
         }
         ui.add_space(16.0);
         if let Some(creator) = self.online_video.creator.clone() {
-            if design::back_button(ui, l.text("返回搜索结果", "Back to results")).clicked() {
+            let back_tip = if self.online_video.updates.return_to_updates {
+                l.text("返回更新", "Back to updates")
+            } else {
+                l.text("返回搜索结果", "Back to results")
+            };
+            if design::back_button(ui, back_tip).clicked() {
                 self.online_video.creator = None;
                 self.online_video.uploads_job = None;
+                if self.online_video.updates.return_to_updates {
+                    self.workspace.video_tab = 2;
+                    self.online_video.updates.return_to_updates = false;
+                }
                 self.online_video.status.clear();
                 return;
             }

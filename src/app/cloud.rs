@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct State {
+    video_ready: bool,
     configured: Option<sync::Settings>,
     journal: Option<sync::Journal>,
     job: Option<crate::jobs::Job<sync::webdav::Report>>,
@@ -24,6 +25,7 @@ pub(super) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            video_ready: false,
             configured: None,
             journal: None,
             job: None,
@@ -92,6 +94,9 @@ fn secrets(settings: &Settings) -> BTreeMap<String, String> {
 }
 
 impl App {
+    pub(in crate::app) fn video_updates_cloud_ready(&self) -> bool {
+        !self.settings.sync.enabled || self.cloud.video_ready
+    }
     pub(super) fn cloud_closing(&self) -> bool {
         self.cloud.closing.is_some()
     }
@@ -203,6 +208,7 @@ impl App {
             data.insert(format!("{prefix}/favorited_at"), json!(record.favorited_at));
             data.insert(format!("{prefix}/progress"), json!({"position":record.position,"duration":record.duration,"played":record.played}));
         }
+        self.video_updates_snapshot(&mut data);
         data
     }
 
@@ -237,6 +243,8 @@ impl App {
         }
         let now = Instant::now();
         if self.cloud.configured.as_ref() != Some(&self.settings.sync) {
+            self.cloud.video_ready = false;
+            self.reset_video_updates();
             self.cloud.job = None;
             self.cloud.probe = None;
             self.cloud.journal = None;
@@ -253,6 +261,11 @@ impl App {
                     .join(format!("{}.json", self.settings.sync.device_id));
                 match sync::Journal::load(&self.cloud.path, &self.settings.sync.device_id) {
                     Ok(journal) => {
+                        if let Err(error) = self.import_video_updates(&journal.values()) {
+                            self.cloud.failed = true;
+                            self.cloud.status = error.to_string();
+                            return;
+                        }
                         self.cloud.journal = Some(journal);
                         self.cloud.failed = false;
                         self.cloud.status.clear();
@@ -450,6 +463,7 @@ impl App {
         let mut applied = values.clone();
         sync::portable::preserve_local_progress(&mut applied, &local, &baseline);
         self.apply_cloud_library(&applied)?;
+        self.cloud.video_ready = true;
         journal.uploaded = report.journal.uploaded;
         journal.last_success = report.journal.last_success;
         journal.secret_hashes = report.journal.secret_hashes;
@@ -483,6 +497,7 @@ impl App {
     }
 
     fn apply_cloud_library(&mut self, values: &Snapshot) -> anyhow::Result<()> {
+        self.import_video_updates(values)?;
         let previous_records = self.library.records.clone();
         let previous_creators = self.library.creators.clone();
         let creators = values
@@ -1176,6 +1191,90 @@ mod tests {
         assert_eq!(
             app.cloud.journal.as_ref().unwrap().values()[&key]["position"],
             35.0
+        );
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod video_update_tests {
+    use super::*;
+    fn snapshot() -> Snapshot {
+        Snapshot::from([
+            (
+                "creator/bilibili/123/profile".into(),
+                json!({"mid":123,"uname":"Creator","usign":"","fans":0,"videos":1,"avatar":null}),
+            ),
+            ("creator/bilibili/123/favorite".into(), json!(true)),
+            ("creator/bilibili/123/favorited_at".into(), json!(42)),
+            ("video-updates/bilibili/123/42/baseline".into(), json!(100)),
+            ("video-updates/bilibili/123/42/boundary".into(), json!(200)),
+            (
+                "video-updates/bilibili/123/42/post/BV0000000003".into(),
+                json!({"bvid":"BV0000000003","title":"New upload","duration":"1:20","cover":null,"published":200}),
+            ),
+        ])
+    }
+    #[test]
+    fn video_updates_cloud_pipeline_persists_and_merges_seen_state_with_inflight_new_uploads() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&directory).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        app.library = library::Library::open(directory.join("library.json"));
+        app.cloud.path = directory.join("journal.json");
+        app.cloud.journal = Some(sync::Journal::load(&app.cloud.path, "A").unwrap());
+        app.apply_cloud_library(&snapshot()).unwrap();
+        assert_eq!(
+            app.online_video.updates.counts(&app.library.creators),
+            (1, 1)
+        );
+        app.capture_cloud(false).unwrap();
+        let persisted = sync::Journal::load(&app.cloud.path, "A").unwrap();
+        assert!(
+            persisted
+                .values()
+                .contains_key("video-updates/bilibili/123/42/post/BV0000000003")
+        );
+        let mut remote = sync::Journal::load(&directory.join("remote.json"), "B").unwrap();
+        remote.merge(&persisted.document).unwrap();
+        remote.observed = remote.values();
+        let mut marked = remote.values();
+        marked.insert(
+            "video-updates/bilibili/123/42/read/BV0000000003".into(),
+            json!(true),
+        );
+        remote.capture(marked, &Snapshot::new());
+        // A new post arrives locally while the remote request is in flight.
+        let mut local = app.cloud_snapshot();
+        local.insert("video-updates/bilibili/123/42/post/BV0000000004".into(), json!({"bvid":"BV0000000004","title":"Later upload","duration":"1:00","cover":null,"published":201}));
+        app.import_video_updates(&local).unwrap();
+        app.finish_cloud(sync::webdav::Report {
+            journal: remote,
+            secrets: Default::default(),
+        })
+        .unwrap();
+        assert!(app.video_updates_cloud_ready());
+        assert_eq!(
+            app.online_video.updates.counts(&app.library.creators),
+            (1, 1)
+        );
+        let merged = app.cloud_snapshot();
+        assert_eq!(
+            merged["video-updates/bilibili/123/42/read/BV0000000003"],
+            json!(true)
+        );
+        assert!(merged.contains_key("video-updates/bilibili/123/42/post/BV0000000004"));
+        // Restore from the existing sync journal without an update-library file.
+        let restored = sync::Journal::load(&app.cloud.path, "A").unwrap();
+        app.reset_video_updates();
+        app.import_video_updates(&restored.values()).unwrap();
+        assert_eq!(
+            app.online_video.updates.counts(&app.library.creators),
+            (1, 1)
         );
         drop(app);
         std::fs::remove_dir_all(directory).unwrap();

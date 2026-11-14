@@ -502,6 +502,7 @@ impl State {
                         {
                             let mut entry = entry.clone();
                             entry.set_favorite(!entry.favorite);
+                            entry.directory_reverse = self.reverse;
                             self.save(entry);
                         }
                     }
@@ -610,7 +611,7 @@ impl State {
                 )
                 .clicked()
                 {
-                    self.reverse = !self.reverse;
+                    self.set_directory_reverse(!self.reverse);
                 }
             });
         });

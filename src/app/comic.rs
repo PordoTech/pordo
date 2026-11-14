@@ -763,11 +763,21 @@ impl State {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
+    fn set_directory_reverse(&mut self, reverse: bool) {
+        self.reverse = reverse;
+        if let Some(mut entry) = self.selected_entry().filter(|e| e.favorite) {
+            entry.directory_reverse = reverse;
+            self.save(entry);
+        }
+    }
     fn open_book(&mut self, book: Book) {
         self.flush();
         self.reader = None;
         self.view = View::Detail;
         self.selected = Some(book.clone());
+        self.reverse = self
+            .selected_entry()
+            .is_some_and(|e| e.favorite && e.directory_reverse);
         self.chapter_filter = Some(domain::ChapterKind::Chapter);
         if let Some(entry) = self.selected_entry()
             && !entry
@@ -844,6 +854,7 @@ impl State {
             .and_then(|p| entry.chapters.iter().position(|c| c.key() == p.chapter))
             .unwrap_or(0);
         self.chapter_filter = entry.chapters.get(index).map(|c| c.kind);
+        self.reverse = entry.favorite && entry.directory_reverse;
         self.selected = Some(entry.book);
         self.read_chapter(index, settings, true);
     }

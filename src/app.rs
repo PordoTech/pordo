@@ -28,6 +28,7 @@ mod metadata;
 mod music;
 mod online_music;
 mod online_video;
+mod playlists;
 mod preferences;
 mod providers;
 mod qq;
@@ -81,6 +82,7 @@ enum Act {
 pub struct App {
     workspace: workspace::State,
     library: library::Library,
+    playlists: playlists::State,
     history_undo: Option<(library::RemovedHistory, Instant)>,
     comic: comic::State,
     cloud: cloud::State,
@@ -194,6 +196,7 @@ impl App {
         let mut app = Self {
             workspace: workspace::State::default(),
             library: library::Library::load(),
+            playlists: playlists::State::load(),
             history_undo: None,
             comic,
             cloud: Default::default(),
@@ -673,6 +676,7 @@ impl eframe::App for App {
         let ctx = root.ctx().clone();
         self.updater.poll();
         self.poll_cloud(&ctx);
+        self.poll_video_updates(&ctx);
         self.poll_cloud_close(&ctx);
         if self.cloud_closing() {
             root.disable();

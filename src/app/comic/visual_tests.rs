@@ -2079,3 +2079,62 @@ fn navigation_has_only_home_media_and_settings_and_favorites_use_collection_orde
     };
     assert!(positions("New favorite") < positions("Old favorite"));
 }
+
+#[test]
+fn favorite_directory_sort_is_per_book_persists_and_keeps_chapter_order() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/test-data")
+        .join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("comics.db");
+    let ctx = egui::Context::default();
+    let mut state = fixture(&ctx);
+    let mut library = Library::open(&path).unwrap();
+    let entries: Vec<_> = state.entries().iter().take(2).cloned().collect();
+    for mut entry in entries.clone() {
+        entry.favorite = true;
+        library.save(entry).unwrap();
+    }
+    state.library = Some(library);
+    state.source = None;
+    state.open_book(entries[0].book.clone());
+    assert!(!state.reverse);
+    state.set_directory_reverse(true);
+    state.open_book(entries[1].book.clone());
+    assert!(!state.reverse);
+    state.open_book(entries[0].book.clone());
+    assert!(state.reverse);
+    let original: Vec<_> = entries[0]
+        .chapters
+        .iter()
+        .map(|c| c.key().to_owned())
+        .collect();
+    assert_eq!(
+        state
+            .selected_entry()
+            .unwrap()
+            .chapters
+            .iter()
+            .map(|c| c.key().to_owned())
+            .collect::<Vec<_>>(),
+        original
+    );
+    state.library = Some(Library::open(&path).unwrap());
+    state.open_book(entries[0].book.clone());
+    assert!(state.reverse);
+    let legacy: Entry = serde_json::from_str(r#"{"favorite":true}"#).unwrap();
+    assert!(!legacy.directory_reverse);
+    // Portable imports preserve this device's preference, without exporting it.
+    let mut snapshot = crate::sync::model::Snapshot::default();
+    crate::sync::portable::capture_comics(&mut snapshot, state.entries(), None);
+    let imported = crate::sync::portable::apply_comics(&snapshot, state.entries()).unwrap();
+    assert!(
+        imported
+            .iter()
+            .find(|e| e.book.key() == entries[0].book.key())
+            .unwrap()
+            .directory_reverse
+    );
+    drop(state);
+    std::fs::remove_dir_all(directory).unwrap();
+}

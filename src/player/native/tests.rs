@@ -663,3 +663,99 @@ fn native_media_progressive_audio_buffers_and_new_seek_preempts_missing_data() {
         std::panic::resume_unwind(error);
     }
 }
+
+#[test]
+#[ignore = "requires staged remdia components and native audio fixture"]
+fn native_media_initial_music_device_failure_waits_and_recovers() {
+    audio::simulate_initial_failures(2);
+    let mut player = Player::open(fixture("audio.wav")).unwrap();
+    let mut recovered = false;
+    until(&mut player, Duration::from_secs(6), |p, events| {
+        assert!(!events.iter().any(|e| matches!(e, Event::Warning(_))));
+        recovered |= events.iter().any(|e| matches!(e, Event::Recovered));
+        recovered && p.snapshot().has_audio && p.position() > 0.1
+    });
+    assert_eq!(
+        player.shared.output.open_attempts.load(Ordering::Acquire),
+        3
+    );
+}
+
+#[test]
+#[ignore = "requires staged remdia components; simulates repeated Windows default-endpoint changes"]
+fn native_media_repeated_default_device_switches_keep_pause_position_and_sample_rate() {
+    let mut player = Player::open(fixture("audio.wav")).unwrap();
+    until(&mut player, Duration::from_secs(5), |p, _| {
+        p.position() > 0.1
+    });
+    player.set_playing(false);
+    until(&mut player, Duration::from_secs(2), |p, _| {
+        p.snapshot().state == PlaybackState::Paused
+    });
+    let position = player.position();
+    for change in 0..12 {
+        let epoch = player.snapshot().epoch;
+        player.shared.output.simulated_rate.store(
+            if change % 2 == 0 { 44100 } else { 48000 },
+            Ordering::Release,
+        );
+        player
+            .shared
+            .output
+            .simulated_device
+            .store(change + 2, Ordering::Release);
+        let mut recovered = false;
+        until(&mut player, Duration::from_secs(4), |p, events| {
+            assert!(!events.iter().any(|e| matches!(e, Event::Warning(_))));
+            recovered |= events.iter().any(|e| matches!(e, Event::Recovered));
+            recovered
+                && p.snapshot().epoch > epoch
+                && p.snapshot().has_audio
+                && p.snapshot().state == PlaybackState::Paused
+        });
+        assert!((player.position() - position).abs() < 0.04);
+    }
+    assert_eq!(
+        player.shared.output.open_attempts.load(Ordering::Acquire),
+        13
+    );
+    player.set_playing(true);
+    until(&mut player, Duration::from_secs(4), |p, _| {
+        p.position() > position + 0.1
+    });
+}
+
+#[test]
+#[ignore = "requires staged remdia components; validates reconnection after a prolonged outage"]
+fn native_media_long_music_device_outage_keeps_track_and_recovers_after_warning() {
+    let mut player = Player::open(fixture("audio.wav")).unwrap();
+    until(&mut player, Duration::from_secs(5), |p, _| {
+        p.position() > 0.1
+    });
+    let position = player.position();
+    player
+        .shared
+        .output
+        .simulated_open_failures
+        .store(100, Ordering::Release);
+    player.shared.output.failed.store(true, Ordering::Release);
+    let mut warned = false;
+    until(&mut player, Duration::from_secs(13), |p, events| {
+        warned |= events.iter().any(|e| matches!(e, Event::Warning(_)));
+        assert!(
+            (p.position() - position).abs() < 0.05,
+            "music must not silently advance without a device"
+        );
+        warned
+    });
+    player
+        .shared
+        .output
+        .simulated_open_failures
+        .store(0, Ordering::Release);
+    let mut recovered = false;
+    until(&mut player, Duration::from_secs(5), |p, events| {
+        recovered |= events.iter().any(|e| matches!(e, Event::Recovered));
+        recovered && p.snapshot().has_audio && p.position() > position + 0.1
+    });
+}

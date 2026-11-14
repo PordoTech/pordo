@@ -1,7 +1,7 @@
 [package]
 name = "pordo-android"
 # Keep in lockstep with the application version; core source user agents embed it.
-version = "0.6.4"
+version = "0.6.5"
 edition = "2024"
 description = "Android JNI bridge exposing pordo-core and remedia media sessions as libpordo_android.so."
 license = "MIT"
@@ -10,7 +10,7 @@ license = "MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-pordo-core = { path = "../pordo-core", version = "0.6.4" }
+pordo-core = { path = "../pordo-core", version = "0.6.5" }
 
 # The bridge only exists on Android; host builds produce an empty library so
 # desktop workspaces keep compiling every member.

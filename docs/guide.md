@@ -20,6 +20,8 @@ Click the **Lyrics** icon in the playback bar, then choose **Generate AI lyrics*
 
 Use the queue sidebar to select, remove or reorder entries. Hold an item's title before dragging to reorder. Favorites and recent activity are available from the media pages and Home. **Play all** on music favorites uses the displayed favorites, including online tracks not downloaded on this device.
 
+In **Music → Playlists**, create, rename or delete a playlist. Use a favorite song’s **More → Add to playlist**, or **Add songs** in a playlist to select multiple favorites. Hold a song’s title to reorder it, or use **Move up / Move down**. **Play all** starts the playlist; double-clicking a song starts the full playlist at that song. Removing a song or deleting a playlist keeps favorites and files. Playlist edits do not change an already playing queue. Playlists are stored locally and are not included in cloud sync.
+
 | Shortcut | Action |
 | --- | --- |
 | Space | Pause/resume media |
@@ -41,7 +43,7 @@ While a video is playing (including seeking or buffering), Pordo requests that t
 
 Music, video and comic searches show progress in the search button without adding a loading row below the input. Comic update checks keep the refresh icon's size while it spins.
 
-If a video's audio device disconnects, recovery waits while the video is paused and resumes with playback. Initial audio-output failures also retry. Audio recovery notices appear only on the current playback page.
+On Windows, playback follows the default output when headphones or other audio devices are connected or removed. Short device outages retry automatically. Music waits at its current position; video may continue while audio is unavailable. Longer outages keep retrying, so reconnecting an output does not require reopening the media. Paused video defers audio recovery until playback resumes. Audio recovery notices appear only on the current playback page.
 
 ### Online music
 
@@ -57,6 +59,14 @@ Some QMC/MFLAC/MGG variants are supported. If the player requests a song key, us
 
 Legacy QMC1 and supported QMC2 Map/RC4 variants can be opened. Some metadata-only variants require an external ekey. EncV2 and unknown footer versions remain unsupported; the extension alone does not establish compatibility. Finish downloading encrypted torrent files before opening them locally.
 
+### Video updates
+
+In **Video → Updates**, new uploads from favorite Bilibili creators are grouped by creator. The first successful check establishes a baseline without marking older uploads as new. Use the refresh icon to check manually; automatic checks run at startup or when entering Home or Video when due, with a 15-minute interval and a one-hour delay after failures. Disable automatic checks in Video settings if preferred.
+
+Groups show up to six unseen uploads initially and can expand to show the rest. Open a card to play, use its menu to mark it as seen, or mark the whole group as seen and undo within eight seconds. Successful playback marks a video as seen after playback progresses; opening the page or a failed playback attempt does not. Progress remains separate from these update reminders. Large backlogs offer **Continue checking** after each five-page batch.
+
+Update lists, baselines and seen markers use the existing cloud sync and merge between devices. No separate local update library is created. Without cloud sync enabled, these states last only for the current session. A new device waits for its first successful cloud sync before establishing missing baselines. Request queues, failure delays and pagination cursors remain session state; after restart, checks rescan from the first page and deduplicate against the synced content.
+
 ### Magnet links
 
 Choose **Open magnet link**, wait for metadata and select a supported file. Playback waits for verified downloaded data; seeking prioritizes the requested location. Poor peer availability or a proxy blocking BT traffic can delay playback.
@@ -71,7 +81,7 @@ Search MangaYun or Komiic, open a title and choose a chapter. Sources remain sep
 
 Favorite updates are checked at startup and when returning home, at least 15 minutes apart. Komiic checks up to 50 update summaries in one request, shows the latest chapter/volume and keeps an update dot without downloading directories or images. Opening a title's details fetches its directory and resolves exact unread chapter counts. MangaYun uses directory checks with at most four background requests overall, two per upstream source and 500 ms between request starts for each source. Each background request has a 20-second limit; errors leave cached data available. Automatic checks revisit completed titles after a day and failed titles after an hour. Manual refresh bypasses those intervals.
 
-Choose vertical scrolling, left-to-right or right-to-left pages. Zoom, page position and reading progress are saved. The chapter button opens the chapter list; the page slider and previous/next controls navigate within the book. A new favorite starts with the existing chapter list as its baseline; later unread additions produce update indicators.
+Choose vertical scrolling, left-to-right or right-to-left pages. Zoom, page position and reading progress are saved. The chapter button opens the chapter list; the page slider and previous/next controls navigate within the book. A new favorite starts with the existing chapter list as its baseline; later unread additions produce update indicators. Each favorite comic remembers its own ascending or descending detail-directory order on this device. The default is ascending; this display preference does not change previous/next chapter navigation.
 
 Finishing the latest chapter or volume dismisses that comic's current update notice, even if earlier chapters remain unread. Earlier chapters keep their actual read/unread status. New chapters make the comic appear in Updates again. The dismissal is saved and follows reading-progress cloud sync.
 
@@ -122,7 +132,7 @@ Configure an HTTPS WebDAV service in **Settings → Cloud Sync**, test the conne
 
 Sync runs on startup, manual requests and changes to favorites or settings, without periodic polling. Reading and playback progress is saved locally and submitted when leaving the reader/player or closing the app. Unchanged device files are skipped using their ETags. Desktop shutdown waits up to eight seconds for pending sync; unfinished uploads remain saved for the next startup.
 
-Sync covers supported service/model settings, comic and online-music favorites, reading/listening progress and related preferences. It does not upload local media files or paths, playback queues, downloaded audio, covers, comic pages, translated images or subtitle caches.
+Sync covers supported service/model settings, comic and online-music favorites, favorite Bilibili creators, creator update lists and seen markers, reading/listening progress and related preferences. It does not upload local media files or paths, playback queues, downloaded audio, covers, comic pages, translated images or subtitle caches.
 
 API keys are excluded by default. To sync them, enable the option and use the same separate sync passphrase on all devices; keep the original passphrase available when changing it. WebDAV passwords and the passphrase itself are not uploaded. A wrong passphrase stops writes rather than replacing existing encrypted keys.
 

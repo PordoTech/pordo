@@ -1,7 +1,7 @@
 use super::*;
 
 impl App {
-    pub(super) fn records(&self) -> Vec<Record> {
+    pub(in crate::app) fn records(&self) -> Vec<Record> {
         let mut records = self.library.records.clone();
         for (queue, music) in [
             (&self.queue, self.queue_kind_music),
@@ -40,7 +40,12 @@ impl App {
         records
     }
     pub(super) fn play_records(&mut self, records: &[Record]) {
-        let Some(first) = records.first() else { return };
+        self.play_records_from(records, 0);
+    }
+    pub(in crate::app) fn play_records_from(&mut self, records: &[Record], start: usize) {
+        let Some(first) = records.get(start) else {
+            return;
+        };
         self.update_library();
         self.comic.flush();
         self.set_active_queue(first.music);
@@ -49,7 +54,7 @@ impl App {
         self.online_music.errors.clear();
         self.workspace.resume = None;
         self.queue_open = true;
-        self.play_queue(0);
+        self.play_queue(start);
     }
     pub(in crate::app) fn play_record(&mut self, record: Record, resume: bool) {
         if let Some(bvid) = crate::bilibili::video_id(&record.path) {
@@ -85,7 +90,7 @@ impl App {
             .map(|position| (identity, position));
         self.play_queue(index);
     }
-    pub(super) fn record_art(&mut self, ui: &Ui, rect: Rect, record: &Record) {
+    pub(in crate::app) fn record_art(&mut self, ui: &Ui, rect: Rect, record: &Record) {
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -212,6 +217,9 @@ impl App {
                             favorite = Some(record.clone());
                         }
                         response.context_menu(|ui| {
+                            if record.music {
+                                self.playlist_track_menu(ui, record, 0, false);
+                            }
                             if record.played > 0
                                 && design::menu_item(
                                     ui,
@@ -267,26 +275,36 @@ impl App {
         };
         page_heading(ui, title, None);
         if page == Page::Music {
-            let labels = [l.text("收藏", "Favorites"), l.text("搜索", "Search")];
+            let labels = [
+                l.text("收藏", "Favorites"),
+                l.text("歌单", "Playlists"),
+                l.text("搜索", "Search"),
+            ];
             design::tabs(ui, &mut self.workspace.music_tab, &labels);
             ui.add_space(12.0);
             if self.workspace.music_tab == 1 {
+                self.playlists_page(ui);
+                return;
+            }
+            if self.workspace.music_tab == 2 {
                 self.online_music_contents(ui);
                 return;
             }
         }
         if page == Page::Video {
-            let labels = [l.text("收藏", "Favorites"), l.text("搜索", "Search")];
-            let previous = self.workspace.video_tab;
-            design::tabs(ui, &mut self.workspace.video_tab, &labels);
+            self.video_library_tabs(ui);
             ui.add_space(12.0);
             if self.workspace.video_tab == 1 {
                 self.online_video_contents(ui);
                 return;
             }
-            if previous != self.workspace.video_tab {
-                self.online_video.cancel_discovery();
+            if self.workspace.video_tab == 2 {
+                self.video_updates_page(ui);
+                return;
             }
+        }
+        if page == Page::Music {
+            self.playlist_notice(ui);
         }
         let mut records = self.records();
         let query = self.workspace.query.to_lowercase();
@@ -384,7 +402,7 @@ impl App {
                         );
                     }
                     for (index, record) in records.iter().enumerate() {
-                        self.track_row(ui, record, index);
+                        self.track_row(ui, record, index, false);
                     }
                 }
             }
@@ -408,11 +426,24 @@ impl App {
             }
         });
     }
-    fn track_row(&mut self, ui: &mut Ui, record: &Record, index: usize) {
+    pub(in crate::app) fn track_row(
+        &mut self,
+        ui: &mut Ui,
+        record: &Record,
+        index: usize,
+        in_playlist: bool,
+    ) -> Rect {
         let current = self.active_record_path().as_deref() == Some(record.path.as_str());
         let (r, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let response = if in_playlist {
+            self.playlists
+                .drag
+                .row(ui, r, index, &record_item(record).source)
+        } else {
+            response
+        };
         if current || response.hovered() {
             ui.painter()
                 .rect_filled(r, 7, if current { SELECTED } else { SURFACE });
@@ -426,7 +457,11 @@ impl App {
         );
         let art = Rect::from_min_size(r.min + vec2(38.0, 10.0), vec2(42.0, 42.0));
         self.record_art(ui, art, record);
-        let end = (r.width() * 0.50).max(160.0);
+        let end = if r.width() > 530.0 {
+            (r.width() * 0.50).max(160.0)
+        } else {
+            (r.width() - if r.width() > 440.0 { 155.0 } else { 100.0 }).max(110.0)
+        };
         let mut text = child(
             ui,
             (&record.path, "track-title"),
@@ -448,14 +483,14 @@ impl App {
                 (&record.path, "album"),
                 Rect::from_min_max(
                     pos2(r.min.x + end + 12.0, r.min.y + 18.0),
-                    pos2(r.max.x - 118.0, r.max.y),
+                    pos2(r.max.x - 154.0, r.max.y),
                 ),
             );
             album.add(egui::Label::new(RichText::new(&record.album).color(MUTED)).truncate());
         }
         let favorite_rect =
-            Rect::from_center_size(pos2(r.max.x - 24.0, r.center().y), Vec2::splat(32.0));
-        if record.duration > 0.0 {
+            Rect::from_center_size(pos2(r.max.x - 60.0, r.center().y), Vec2::splat(32.0));
+        if record.duration > 0.0 && r.width() > 440.0 {
             ui.painter().text(
                 pos2(favorite_rect.min.x - 12.0, r.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -474,6 +509,9 @@ impl App {
             .on_hover_text(self.settings.language.text("收藏", "Favorite"))
             .clicked()
         {
+            if let Some(song) = &record.online {
+                self.library.bind_online(record.path.clone(), song.clone());
+            }
             self.library
                 .toggle_favorite(&record.path, &record.title, record.music);
         }
@@ -481,14 +519,24 @@ impl App {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &record.title)
         });
         if response.double_clicked() {
-            self.play_record(record.clone(), false);
-        }
-        response.context_menu(|ui| {
-            if design::menu_item(ui, false, self.settings.language.text("播放", "Play")).clicked()
-            {
+            if in_playlist {
+                self.play_selected_playlist(index);
+            } else {
                 self.play_record(record.clone(), false);
-                ui.close();
             }
+        }
+        let more = Rect::from_center_size(pos2(r.max.x - 20.0, r.center().y), Vec2::splat(30.0));
+        let mut more_ui = child(ui, (&record.path, "track-more"), more);
+        let menu = design::compact_icon_button(
+            &mut more_ui,
+            icons::DOTS_THREE,
+            self.settings.language.text("更多", "More"),
+            false,
+        );
+        egui::Popup::menu(&menu)
+            .show(|ui| self.playlist_track_menu(ui, record, index, in_playlist));
+        response.context_menu(|ui| {
+            self.playlist_track_menu(ui, record, index, in_playlist);
             if record.played > 0
                 && design::menu_item(
                     ui,
@@ -503,10 +551,11 @@ impl App {
                 ui.close();
             }
         });
+        r
     }
 }
 
-fn record_item(record: &Record) -> crate::queue::Item {
+pub(in crate::app) fn record_item(record: &Record) -> crate::queue::Item {
     match &record.online {
         Some(song) => crate::queue::Item::online(song.clone()),
         None => crate::queue::Item::file(record.path.clone()),

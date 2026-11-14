@@ -253,10 +253,10 @@ fn columns(width: f32, minimum: f32, maximum: usize) -> usize {
         .floor()
         .clamp(1.0, maximum as f32) as usize
 }
-fn result_columns(width: f32) -> usize {
+pub(super) fn result_columns(width: f32) -> usize {
     columns(width, MIN_CARD_WIDTH, MAX_COLUMNS)
 }
-fn card_width(width: f32, columns: usize) -> f32 {
+pub(super) fn card_width(width: f32, columns: usize) -> f32 {
     (width - GAP * columns.saturating_sub(1) as f32) / columns as f32
 }
 fn heading(ui: &mut Ui, title: &str, count: usize, link: Option<&str>) -> bool {
@@ -469,7 +469,7 @@ pub(super) fn part_card(
     response
 }
 
-fn video_card<Tz: chrono::TimeZone>(
+pub(super) fn video_card<Tz: chrono::TimeZone>(
     ui: &mut Ui,
     previews: &mut Previews,
     video: &bilibili::Video,

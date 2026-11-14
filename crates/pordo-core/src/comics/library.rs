@@ -35,6 +35,8 @@ pub struct Entry {
     pub updates_seen: Option<UpdateSeen>,
     pub mode: Option<ReadingMode>,
     pub zoom: f32,
+    /// Local, per-book detail directory preference; missing legacy fields stay ascending.
+    pub directory_reverse: bool,
 }
 impl Entry {
     fn directory_revision(&self) -> String {

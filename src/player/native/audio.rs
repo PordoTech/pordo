@@ -3,13 +3,21 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::clock::Clock;
+#[cfg(all(not(test), not(windows)))]
+use anyhow::Context;
 use anyhow::Result;
 #[cfg(not(test))]
-use anyhow::{Context, bail};
+use anyhow::bail;
+#[cfg(all(not(test), not(windows)))]
+use cpal::traits::HostTrait;
 #[cfg(not(test))]
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 
 use rtrb::{Producer, RingBuffer};
+
+#[cfg(all(windows, not(test)))]
+#[path = "device.rs"]
+mod device;
 
 #[cfg(test)]
 thread_local! { static INITIAL_OPEN_FAILURES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
@@ -44,6 +52,9 @@ pub struct OutputControl {
     pub failed: AtomicBool,
     pub underruns: AtomicU64,
     pub device_error: Mutex<Option<String>>,
+    stream_token: AtomicU64,
+    #[cfg(test)]
+    pub simulated_device: AtomicU64,
     #[cfg(test)]
     pub simulated_rate: AtomicU32,
     #[cfg(test)]
@@ -61,6 +72,9 @@ impl OutputControl {
             failed: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
             device_error: Mutex::new(None),
+            stream_token: AtomicU64::new(0),
+            #[cfg(test)]
+            simulated_device: AtomicU64::new(1),
             #[cfg(test)]
             simulated_rate: AtomicU32::new(48000),
             #[cfg(test)]
@@ -71,12 +85,42 @@ impl OutputControl {
             rendered: Mutex::new(RenderedAudio::default()),
         }
     }
+    fn begin_stream(&self) -> u64 {
+        let mut error = self.device_error.lock().unwrap_or_else(|e| e.into_inner());
+        *error = None;
+        self.failed.store(false, Ordering::Release);
+        self.stream_token.fetch_add(1, Ordering::AcqRel) + 1
+    }
+    fn report_error(&self, token: u64, error: cpal::Error) {
+        if token != self.stream_token.load(Ordering::Acquire) {
+            return;
+        }
+        match error.kind() {
+            cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied => {}
+            cpal::ErrorKind::Xrun => {
+                self.underruns.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                let mut saved = self.device_error.lock().unwrap_or_else(|e| e.into_inner());
+                if token != self.stream_token.load(Ordering::Acquire) {
+                    return;
+                }
+                *saved = Some(error.to_string());
+                self.enabled.store(false, Ordering::Release);
+                self.failed.store(true, Ordering::Release);
+            }
+        }
+    }
 }
 pub struct AudioOut {
     pub rate: u32,
     pub producer: Producer<Sample>,
     pub capacity: usize,
     _stream: Option<cpal::Stream>,
+    #[cfg(all(windows, not(test)))]
+    device_id: cpal::DeviceId,
+    #[cfg(test)]
+    device_id: u64,
     #[cfg(test)]
     simulation_stop: Arc<AtomicBool>,
 }
@@ -86,6 +130,10 @@ pub fn open_output(
     control: Arc<OutputControl>,
     volume: Arc<AtomicU32>,
 ) -> Result<AudioOut> {
+    let token = control.begin_stream();
+    #[cfg(windows)]
+    let (device, device_id) = device::open_default()?;
+    #[cfg(not(windows))]
     let device = cpal::default_host()
         .default_output_device()
         .context("no output device")?;
@@ -96,13 +144,7 @@ pub fn open_output(
     let capacity = (rate as usize / 2).max(1024);
     let (producer, consumer) = RingBuffer::<Sample>::new(capacity);
     let err_control = control.clone();
-    let err_cb = move |error: cpal::Error| {
-        *err_control
-            .device_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
-        err_control.failed.store(true, Ordering::Release);
-    };
+    let err_cb = move |error: cpal::Error| err_control.report_error(token, error);
 
     macro_rules! build {
         ($ty:ty) => {{
@@ -184,6 +226,8 @@ pub fn open_output(
         producer,
         capacity,
         _stream: Some(stream),
+        #[cfg(windows)]
+        device_id,
     })
 }
 #[cfg(test)]
@@ -192,6 +236,7 @@ pub fn open_output(
     control: Arc<OutputControl>,
     _volume: Arc<AtomicU32>,
 ) -> Result<AudioOut> {
+    control.begin_stream();
     control.open_attempts.fetch_add(1, Ordering::AcqRel);
     if control
         .simulated_open_failures
@@ -205,6 +250,7 @@ pub fn open_output(
     let (producer, mut consumer) = RingBuffer::<Sample>::new(capacity);
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
+    let device_id = control.simulated_device.load(Ordering::Acquire);
     std::thread::spawn(move || {
         let mut tick = std::time::Instant::now();
         let mut remainder = 0.0;
@@ -257,8 +303,22 @@ pub fn open_output(
         capacity,
         producer,
         _stream: None,
+        device_id,
         simulation_stop: stop,
     })
+}
+impl AudioOut {
+    #[cfg(any(windows, test))]
+    pub fn default_changed(&self, _control: &OutputControl) -> bool {
+        #[cfg(test)]
+        {
+            _control.simulated_device.load(Ordering::Acquire) != self.device_id
+        }
+        #[cfg(all(windows, not(test)))]
+        {
+            device::default_id().as_ref() != Some(&self.device_id)
+        }
+    }
 }
 #[cfg(test)]
 impl Drop for AudioOut {
@@ -487,6 +547,32 @@ impl AudioPipeline {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn audio_device_notifications_distinguish_xruns_routes_and_stale_stream_errors() {
+        let control = OutputControl::new();
+        control.stream_token.store(2, Ordering::Release);
+        control.enabled.store(true, Ordering::Release);
+        for kind in [
+            cpal::ErrorKind::Xrun,
+            cpal::ErrorKind::DeviceChanged,
+            cpal::ErrorKind::RealtimeDenied,
+        ] {
+            control.report_error(2, kind.into());
+        }
+        assert!(!control.failed.load(Ordering::Acquire));
+        assert!(control.enabled.load(Ordering::Acquire));
+        assert_eq!(control.underruns.load(Ordering::Acquire), 1);
+        control.report_error(1, cpal::ErrorKind::DeviceNotAvailable.into());
+        assert!(
+            !control.failed.load(Ordering::Acquire),
+            "a replaced stream cannot invalidate its replacement"
+        );
+        control.report_error(2, cpal::ErrorKind::StreamInvalidated.into());
+        assert!(control.failed.load(Ordering::Acquire));
+        assert!(!control.enabled.load(Ordering::Acquire));
+        assert!(control.device_error.lock().unwrap().is_some());
+    }
+
     use super::*;
 
     #[test]

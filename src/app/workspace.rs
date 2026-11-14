@@ -24,7 +24,7 @@ pub(super) struct State {
     pub settings_return: Option<Page>,
     pub settings_draft_retained: bool,
     query: String,
-    music_tab: usize,
+    pub(super) music_tab: usize,
     pub(super) video_tab: usize,
     pub listening_tab: usize,
     filter: usize,
@@ -82,7 +82,8 @@ impl App {
             self.navigate(Page::Settings);
         }
         let mut act = Act::None;
-        if ctx.input(|i| i.key_pressed(Key::Escape))
+        if !self.playlists.dialog_open()
+            && ctx.input(|i| i.key_pressed(Key::Escape))
             && !(self.workspace.page == Page::Comic && self.comic.reading())
         {
             if window::fullscreen(&ctx) {
@@ -104,7 +105,8 @@ impl App {
                 self.queue_open = false;
             }
         }
-        if !ctx.egui_wants_keyboard_input()
+        if !self.playlists.dialog_open()
+            && !ctx.egui_wants_keyboard_input()
             && !self.updater.dialog_visible
             && !self.magnet_open
             && !self.online_music.open
@@ -250,6 +252,7 @@ impl App {
                 Page::Music | Page::Video => self.media_library(&mut ui),
                 _ => {}
             }
+            self.playlist_dialog(&ctx);
             if page_action_width > 0.0 {
                 let video_page = self.workspace.page == Page::Video;
                 let mut actions = child(
