@@ -151,13 +151,7 @@ impl App {
         let mut install = false;
         let mut dismiss = false;
         let modal = egui::Modal::new(Id::new("update-dialog"))
-            .frame(
-                egui::Frame::new()
-                    .fill(SURFACE)
-                    .stroke(Stroke::new(1.0, design::LINE))
-                    .corner_radius(12)
-                    .inner_margin(22),
-            )
+            .frame(design::modal_frame())
             .show(ctx, |ui| {
                 ui.set_width(480.0_f32.min((ctx.content_rect().width() - 64.0).max(240.0)));
                 ui.heading(l.text("发现新版本", "Update available"));

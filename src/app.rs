@@ -105,6 +105,7 @@ pub struct App {
     artwork: Option<egui::TextureHandle>,
     lyrics: crate::lyrics::Lyrics,
     lyrics_follow: bool,
+    lyrics_scrolled_to: Option<usize>,
     lyric_generation: lyrics::State,
     append_dialog: bool,
     settings: Settings,
@@ -219,6 +220,7 @@ impl App {
             artwork: None,
             lyrics: crate::lyrics::Lyrics::default(),
             lyrics_follow: true,
+            lyrics_scrolled_to: None,
             lyric_generation: Default::default(),
             append_dialog: false,
             updater: crate::updater::Updater::new(settings.auto_check_updates, cc.egui_ctx.clone()),
@@ -461,7 +463,7 @@ impl App {
         self.source = Some(PathBuf::from(&path));
         self.lyrics =
             crate::lyrics::Lyrics::load_for(std::path::Path::new(&path)).unwrap_or_default();
-        self.lyrics_follow = true;
+        self.reset_lyrics_follow();
         self.player = None;
         self.online_video.stop();
         self.loading = true;
@@ -1308,6 +1310,7 @@ impl App {
                 }
             }
             Act::Seek(t) => {
+                self.reset_lyrics_follow();
                 self.video_skip.manual_seek(t);
                 if let Some(job) = &self.subtitle_job {
                     job.prioritize(t);
@@ -1352,6 +1355,7 @@ impl App {
             }
             Act::Previous => {
                 if music && pos > 3.0 {
+                    self.reset_lyrics_follow();
                     if let Some(p) = &self.player {
                         self.pending_seek = Some((p.seek(0.0), 0.0));
                     }
@@ -1866,62 +1870,139 @@ fn draw_volume(p: &Painter, r: Rect, c: Color32, muted: bool, level: f32) {
     }
 }
 
-fn setup_fonts(ctx: &egui::Context) {
-    static CJK_FONT: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
-    static SYMBOL_FONT: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+impl App {
+    pub(super) fn reset_lyrics_follow(&mut self) {
+        self.lyrics_follow = true;
+        self.lyrics_scrolled_to = None;
+    }
+}
 
-    const CJK_CANDIDATES: &[&str] = &[
-        "C:\\Windows\\Fonts\\msyh.ttc",
-        "C:\\Windows\\Fonts\\msyh.ttf",
-        "C:\\Windows\\Fonts\\simhei.ttf",
-        "C:\\Windows\\Fonts\\simsun.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+type FontFace = (&'static [u8], u32);
+
+fn load_font_face(candidates: &[(&str, u32)]) -> Option<FontFace> {
+    candidates.iter().find_map(|(path, index)| {
+        let bytes = std::fs::read(path).ok()?;
+        Some((&*Box::leak(bytes.into_boxed_slice()), *index))
+    })
+}
+
+fn font_data((bytes, index): FontFace) -> egui::FontData {
+    let mut data = egui::FontData::from_static(bytes);
+    data.index = index;
+    data
+}
+
+pub(super) fn setup_fonts(ctx: &egui::Context) {
+    static WESTERN_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
+    static WESTERN_STRONG_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
+    static CJK_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
+    static CJK_STRONG_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
+    static SYMBOL_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
+
+    const WESTERN_CANDIDATES: &[(&str, u32)] = &[
+        ("C:\\Windows\\Fonts\\segoeui.ttf", 0),
+        ("/System/Library/Fonts/SFNS.ttf", 0),
+        ("/System/Library/Fonts/HelveticaNeue.ttc", 0),
     ];
-    const SYMBOL_CANDIDATES: &[&str] = &[
-        "C:\\Windows\\Fonts\\seguisym.ttf",
-        "/System/Library/Fonts/Apple Symbols.ttf",
+    const WESTERN_STRONG_CANDIDATES: &[(&str, u32)] = &[
+        ("C:\\Windows\\Fonts\\seguisb.ttf", 0),
+        ("/System/Library/Fonts/HelveticaNeue.ttc", 10),
+        ("/System/Library/Fonts/SFNS.ttf", 0),
+    ];
+    const CJK_CANDIDATES: &[(&str, u32)] = &[
+        ("C:\\Windows\\Fonts\\msyh.ttc", 0),
+        ("C:\\Windows\\Fonts\\msyh.ttf", 0),
+        ("/System/Library/Fonts/STHeiti Medium.ttc", 1),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+        ("/System/Library/Fonts/STHeiti Light.ttc", 1),
+        ("C:\\Windows\\Fonts\\simhei.ttf", 0),
+        ("C:\\Windows\\Fonts\\simsun.ttc", 0),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
+    ];
+    const CJK_STRONG_CANDIDATES: &[(&str, u32)] = &[
+        ("C:\\Windows\\Fonts\\msyhbd.ttc", 0),
+        ("/System/Library/Fonts/STHeiti Medium.ttc", 1),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 2),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 0),
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc", 0),
+    ];
+    const SYMBOL_CANDIDATES: &[(&str, u32)] = &[
+        ("C:\\Windows\\Fonts\\seguisym.ttf", 0),
+        ("/System/Library/Fonts/Apple Symbols.ttf", 0),
     ];
 
-    let cjk = *CJK_FONT.get_or_init(|| {
-        CJK_CANDIDATES
-            .iter()
-            .find_map(|p| std::fs::read(p).ok())
-            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
-    });
-    if let Some(bytes) = cjk {
+    let cjk = *CJK_FONT.get_or_init(|| load_font_face(CJK_CANDIDATES));
+    let western = *WESTERN_FONT.get_or_init(|| load_font_face(WESTERN_CANDIDATES));
+    let cjk_strong =
+        (*CJK_STRONG_FONT.get_or_init(|| load_font_face(CJK_STRONG_CANDIDATES))).or(cjk);
+    let western_strong = (*WESTERN_STRONG_FONT
+        .get_or_init(|| load_font_face(WESTERN_STRONG_CANDIDATES)))
+    .or(western);
+    let symbols = *SYMBOL_FONT.get_or_init(|| load_font_face(SYMBOL_CANDIDATES));
+    let strong = design::strong_family();
+
+    if let Some(face) = cjk {
         ctx.add_font(egui::epaint::text::FontInsert {
             name: "cjk".into(),
-            data: egui::FontData::from_static(bytes),
-            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
-                .into_iter()
-                .map(|family| egui::epaint::text::InsertFontFamily {
-                    family,
+            data: font_data(face),
+            families: vec![
+                egui::epaint::text::InsertFontFamily {
+                    family: egui::FontFamily::Proportional,
+                    priority: egui::epaint::text::FontPriority::Highest,
+                },
+                egui::epaint::text::InsertFontFamily {
+                    family: egui::FontFamily::Monospace,
                     priority: egui::epaint::text::FontPriority::Lowest,
-                })
-                .collect(),
+                },
+            ],
         });
     }
-
-    let symbols = *SYMBOL_FONT.get_or_init(|| {
-        SYMBOL_CANDIDATES
-            .iter()
-            .find_map(|p| std::fs::read(p).ok())
-            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
-    });
-    if let Some(bytes) = symbols {
+    if let Some(face) = western {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "western".into(),
+            data: font_data(face),
+            families: vec![egui::epaint::text::InsertFontFamily {
+                family: egui::FontFamily::Proportional,
+                priority: egui::epaint::text::FontPriority::Highest,
+            }],
+        });
+    }
+    if let Some(face) = cjk_strong {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "cjk-strong".into(),
+            data: font_data(face),
+            families: vec![egui::epaint::text::InsertFontFamily {
+                family: strong.clone(),
+                priority: egui::epaint::text::FontPriority::Highest,
+            }],
+        });
+    }
+    if let Some(face) = western_strong {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "western-strong".into(),
+            data: font_data(face),
+            families: vec![egui::epaint::text::InsertFontFamily {
+                family: strong.clone(),
+                priority: egui::epaint::text::FontPriority::Highest,
+            }],
+        });
+    }
+    if let Some(face) = symbols {
         ctx.add_font(egui::epaint::text::FontInsert {
             name: "symbols".into(),
-            data: egui::FontData::from_static(bytes),
-            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
-                .into_iter()
-                .map(|family| egui::epaint::text::InsertFontFamily {
-                    family,
-                    priority: egui::epaint::text::FontPriority::Lowest,
-                })
-                .collect(),
+            data: font_data(face),
+            families: [
+                egui::FontFamily::Proportional,
+                egui::FontFamily::Monospace,
+                strong,
+            ]
+            .into_iter()
+            .map(|family| egui::epaint::text::InsertFontFamily {
+                family,
+                priority: egui::epaint::text::FontPriority::Lowest,
+            })
+            .collect(),
         });
     }
 }

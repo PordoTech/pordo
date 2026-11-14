@@ -327,6 +327,7 @@ fn video_updates_group_mark_seen_and_undo_are_clickable_and_keep_all_posts() {
         app.online_video.updates.counts(&app.library.creators),
         (0, 0)
     );
+    ui_frame(&mut app, &ctx, vec![]);
     let output = ui_frame(&mut app, &ctx, vec![]);
     click(&mut app, &ctx, text_position(&output, "Undo mark as seen"));
     assert_eq!(
@@ -428,4 +429,56 @@ fn video_updates_rate_limit_stops_the_batch_without_clearing_unseen_content() {
     );
     drop(app);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn video_updates_tab_uses_red_dot_without_count_in_label() {
+    let ctx = egui::Context::default();
+    let mut app = comic::visual_tests::settings_fixture(&ctx);
+    app.settings.language = Language::English;
+    app.library.creators = vec![creator(1)];
+    app.online_video.updates = State::default();
+    baseline(&mut app.online_video.updates);
+    app.online_video
+        .updates
+        .page("1/42", page(vec![video(3, 200)], false));
+    assert_eq!(
+        app.online_video.updates.counts(&app.library.creators),
+        (1, 1)
+    );
+
+    let render_tabs = |app: &mut App| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 200.0))),
+                ..Default::default()
+            },
+            |ui| app.video_library_tabs(ui),
+        );
+        output.textures_delta.clear();
+        output
+    };
+
+    let output = render_tabs(&mut app);
+    assert!(output.shapes.iter().any(|s| match &s.shape {
+        Shape::Text(t) => t.galley.text() == "Updates",
+        _ => false,
+    }));
+    assert!(!output.shapes.iter().any(|s| match &s.shape {
+        Shape::Text(t) => t.galley.text().contains("Updates ·"),
+        _ => false,
+    }));
+    assert!(output.shapes.iter().any(|s| match &s.shape {
+        Shape::Circle(c) => c.fill == design::BADGE,
+        _ => false,
+    }));
+
+    app.online_video
+        .updates
+        .mark_read("1/42", vec!["BV0000000003".into()]);
+    let output = render_tabs(&mut app);
+    assert!(!output.shapes.iter().any(|s| match &s.shape {
+        Shape::Circle(c) => c.fill == design::BADGE,
+        _ => false,
+    }));
 }

@@ -1154,21 +1154,7 @@ fn media_update_visuals() {
     let mut capture = Capture::new();
     let ctx = egui::Context::default();
     let mut app = settings_fixture(&ctx);
-    // The Windows production font is unavailable on a macOS render host.
-    #[cfg(target_os = "macos")]
-    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/STHeiti Light.ttc") {
-        ctx.add_font(egui::epaint::text::FontInsert {
-            name: "review-cjk".into(),
-            data: egui::FontData::from_owned(bytes),
-            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
-                .into_iter()
-                .map(|family| egui::epaint::text::InsertFontFamily {
-                    family,
-                    priority: egui::epaint::text::FontPriority::Lowest,
-                })
-                .collect(),
-        });
-    }
+    setup_fonts(&ctx);
     app.library.records.clear();
     app.queue = Default::default();
     app.queue_inactive = Default::default();

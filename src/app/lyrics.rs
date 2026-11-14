@@ -164,6 +164,7 @@ impl App {
                 subtitles::Event::Cues(cues) => {
                     state.cues.extend(cues);
                     self.lyrics = crate::lyrics::from_cues(&state.cues);
+                    self.lyrics_scrolled_to = None;
                 }
                 subtitles::Event::Progress { through, total } => {
                     state.status = if total > 0.0 {

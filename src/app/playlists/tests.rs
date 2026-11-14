@@ -308,9 +308,9 @@ fn dialogs_add_existing_create_with_song_and_batch_select_favorites() {
     });
     dialog_frame(&mut app, &ctx, vec![]);
     let output = dialog_frame(&mut app, &ctx, vec![]);
-    click_dialog(&mut app, &ctx, text_position(&output, "Song b · Artist"));
+    click_dialog(&mut app, &ctx, text_position(&output, "Song b"));
     let output = dialog_frame(&mut app, &ctx, vec![]);
-    click_dialog(&mut app, &ctx, text_position(&output, "Add 1 songs"));
+    click_dialog(&mut app, &ctx, text_position(&output, "Add 1 song"));
     assert!(!app.playlists.dialog_open());
     assert_eq!(app.playlist_records(&id).len(), 2);
     std::fs::remove_dir_all(directory).unwrap();

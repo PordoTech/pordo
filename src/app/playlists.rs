@@ -385,40 +385,194 @@ impl App {
             }
         }
     }
+}
+fn song_count_text(language: Language, count: usize) -> String {
+    if count == 1 {
+        language.text("1 首歌曲", "1 song").into()
+    } else {
+        format!("{count} {}", language.text("首歌曲", "songs"))
+    }
+}
+fn action_song_count(
+    language: Language,
+    zh_verb: &str,
+    zh_unit: &str,
+    en_verb: &str,
+    count: usize,
+) -> String {
+    if matches!(language, Language::Chinese) {
+        format!("{zh_verb} {count} {zh_unit}")
+    } else {
+        format!(
+            "{en_verb} {count} {}",
+            if count == 1 { "song" } else { "songs" }
+        )
+    }
+}
+impl App {
     fn playlist_cover(&mut self, ui: &Ui, rect: Rect, tracks: &[Record]) {
-        ui.painter()
-            .rect_filled(rect, 10, Color32::from_rgb(45, 67, 62));
+        let radius = if rect.width() < 48.0 { 6 } else { 10 };
         if tracks.is_empty() {
+            ui.painter().rect_filled(rect, radius, SURFACE);
+            ui.painter().rect_stroke(
+                rect,
+                radius,
+                Stroke::new(1.0, design::LINE),
+                egui::StrokeKind::Inside,
+            );
             icons::paint(
                 ui.painter(),
-                Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.3)),
-                ACCENT,
+                Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.34)),
+                MUTED,
                 icons::MUSIC_NOTES,
             );
-        } else if tracks.len() == 1 {
-            self.record_art(ui, rect, &tracks[0]);
-        } else {
-            let size = (rect.width() - 4.0) / 2.0;
-            for i in 0..4 {
-                let tile = Rect::from_min_size(
-                    rect.min + vec2((i % 2) as f32 * (size + 4.0), (i / 2) as f32 * (size + 4.0)),
-                    Vec2::splat(size),
-                );
-                if let Some(track) = tracks.get(i) {
-                    self.record_art(ui, tile, track);
-                }
-            }
+            return;
+        }
+        let rounding = egui::CornerRadius::same(radius);
+        if tracks.len() == 1 {
+            self.record_art_rounded(ui, rect, &tracks[0], rounding);
+            return;
+        }
+        ui.painter().rect_filled(rect, radius, SURFACE);
+        let seam = if rect.width() < 48.0 { 1.0 } else { 2.0 };
+        let left_w = ((rect.width() - seam) * 0.5).floor();
+        let right_w = rect.width() - left_w - seam;
+        if tracks.len() == 2 {
+            let left = Rect::from_min_size(rect.min, vec2(left_w, rect.height()));
+            let right = Rect::from_min_size(
+                rect.min + vec2(left_w + seam, 0.0),
+                vec2(right_w, rect.height()),
+            );
+            self.record_art_rounded(
+                ui,
+                left,
+                &tracks[0],
+                egui::CornerRadius {
+                    nw: radius,
+                    sw: radius,
+                    ne: 0,
+                    se: 0,
+                },
+            );
+            self.record_art_rounded(
+                ui,
+                right,
+                &tracks[1],
+                egui::CornerRadius {
+                    nw: 0,
+                    sw: 0,
+                    ne: radius,
+                    se: radius,
+                },
+            );
+            return;
+        }
+        let top_h = ((rect.height() - seam) * 0.5).floor();
+        let bottom_h = rect.height() - top_h - seam;
+        if tracks.len() == 3 {
+            let left = Rect::from_min_size(rect.min, vec2(left_w, rect.height()));
+            let top_right =
+                Rect::from_min_size(rect.min + vec2(left_w + seam, 0.0), vec2(right_w, top_h));
+            let bottom_right = Rect::from_min_size(
+                rect.min + vec2(left_w + seam, top_h + seam),
+                vec2(right_w, bottom_h),
+            );
+            self.record_art_rounded(
+                ui,
+                left,
+                &tracks[0],
+                egui::CornerRadius {
+                    nw: radius,
+                    sw: radius,
+                    ne: 0,
+                    se: 0,
+                },
+            );
+            self.record_art_rounded(
+                ui,
+                top_right,
+                &tracks[1],
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: radius,
+                    sw: 0,
+                    se: 0,
+                },
+            );
+            self.record_art_rounded(
+                ui,
+                bottom_right,
+                &tracks[2],
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 0,
+                    se: radius,
+                },
+            );
+            return;
+        }
+        let tiles = [
+            (
+                Rect::from_min_size(rect.min, vec2(left_w, top_h)),
+                egui::CornerRadius {
+                    nw: radius,
+                    ne: 0,
+                    sw: 0,
+                    se: 0,
+                },
+            ),
+            (
+                Rect::from_min_size(rect.min + vec2(left_w + seam, 0.0), vec2(right_w, top_h)),
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: radius,
+                    sw: 0,
+                    se: 0,
+                },
+            ),
+            (
+                Rect::from_min_size(rect.min + vec2(0.0, top_h + seam), vec2(left_w, bottom_h)),
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: radius,
+                    se: 0,
+                },
+            ),
+            (
+                Rect::from_min_size(
+                    rect.min + vec2(left_w + seam, top_h + seam),
+                    vec2(right_w, bottom_h),
+                ),
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 0,
+                    se: radius,
+                },
+            ),
+        ];
+        for (i, (tile, tile_radius)) in tiles.into_iter().enumerate() {
+            self.record_art_rounded(ui, tile, &tracks[i], tile_radius);
         }
     }
     pub(super) fn playlist_notice(&mut self, ui: &mut Ui) {
-        if let Some(error) = &self.playlists.store.load_error {
-            ui.label(format!(
+        let l = self.settings.language;
+        if let Some(error) = self.playlists.store.load_error.clone() {
+            let msg = format!(
                 "{}: {error}",
-                self.settings.language.text(
+                l.text(
                     "无法读取歌单，原文件已保留",
                     "Cannot read playlists; original file preserved"
                 )
-            ));
+            );
+            let (_, dismissed) =
+                design::alert_banner(ui, true, &msg, None, Some(l.text("关闭", "Dismiss")));
+            ui.add_space(8.0);
+            if dismissed {
+                self.playlists.store.load_error = None;
+            }
         }
         if self
             .playlists
@@ -430,34 +584,31 @@ impl App {
             self.playlists.undo = None;
         }
         if let Some((message, _)) = self.playlists.notice.clone() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(message).color(ACCENT));
-                if self.playlists.undo.is_some()
-                    && design::control(
-                        ui,
-                        self.settings.language.text("撤销", "Undo"),
-                        None,
-                        design::Control::Quiet,
-                        0.0,
-                    )
-                    .clicked()
-                    && let Some((id, index, record)) = self.playlists.undo.take()
-                {
-                    let result = self.playlists.store.edit(&id, |p| {
-                        if !p.tracks.iter().any(|r| identity(r) == identity(&record)) {
-                            p.tracks.insert(index.min(p.tracks.len()), record);
-                        }
-                        Ok(())
-                    });
-                    self.playlists.result(
-                        result,
-                        self.settings
-                            .language
-                            .text("已恢复歌曲", "Song restored")
-                            .into(),
-                    );
-                }
-            });
+            let undo_label = self
+                .playlists
+                .undo
+                .is_some()
+                .then_some(l.text("撤销", "Undo"));
+            let (undo_clicked, dismissed) = design::floating_toast(
+                ui.ctx(),
+                Id::new("playlist-toast"),
+                &message,
+                undo_label,
+                Some(l.text("关闭", "Dismiss")),
+            );
+            if undo_clicked && let Some((id, index, record)) = self.playlists.undo.take() {
+                let result = self.playlists.store.edit(&id, |p| {
+                    if !p.tracks.iter().any(|r| identity(r) == identity(&record)) {
+                        p.tracks.insert(index.min(p.tracks.len()), record);
+                    }
+                    Ok(())
+                });
+                self.playlists
+                    .result(result, l.text("已恢复歌曲", "Song restored").into());
+            } else if dismissed {
+                self.playlists.notice = None;
+                self.playlists.undo = None;
+            }
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
     }
@@ -483,29 +634,33 @@ impl App {
                 {
                     self.playlists.selected = None;
                 }
-                ui.label(l.text("我的歌单", "My playlists"));
             });
+            ui.add_space(6.0);
             let records = self.playlist_records(&playlist.id);
+            let count_text = song_count_text(l, records.len());
             ui.horizontal_top(|ui| {
-                let size = (ui.available_width() * 0.23).clamp(64.0, 144.0);
+                ui.spacing_mut().item_spacing.x = 18.0;
+                let size = (ui.available_width() * 0.22).clamp(80.0, 144.0);
                 let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
                 self.playlist_cover(ui, rect, &records);
                 ui.vertical(|ui| {
                     ui.add(
-                        egui::Label::new(RichText::new(&playlist.name).size(26.0).strong())
+                        egui::Label::new(RichText::new(&playlist.name).size(24.0).strong())
                             .truncate(),
                     )
                     .on_hover_text(&playlist.name);
-                    ui.label(
-                        RichText::new(format!("{} {}", records.len(), l.text("首歌曲", "songs")))
-                            .color(MUTED),
-                    );
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(&count_text).color(MUTED));
+                    ui.add_space(12.0);
                     ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         ui.add_enabled_ui(!records.is_empty(), |ui| {
-                            if design::primary_icon_button(
+                            if design::control(
                                 ui,
-                                icons::PLAY,
                                 l.text("播放全部", "Play all"),
+                                Some(|p, r, c| icons::paint(p, r, c, icons::PLAY)),
+                                design::Control::Primary,
+                                0.0,
                             )
                             .clicked()
                             {
@@ -537,7 +692,7 @@ impl App {
                     });
                 });
             });
-            ui.add_space(12.0);
+            ui.add_space(16.0);
             if records.is_empty() {
                 design::empty_state(
                     ui,
@@ -547,7 +702,9 @@ impl App {
                         "No songs yet. Add songs from your favorites.",
                     ),
                 );
+                return;
             }
+            self.track_table_header(ui);
             self.playlists.drag.begin(ui);
             let mut rects = vec![];
             let scroll = design::scroll()
@@ -572,9 +729,9 @@ impl App {
                         .count();
                     if let Some(rect) = rects.get(target).or_else(|| rects.last()) {
                         let y = if target < rects.len() {
-                            rect.top()
+                            rect.top() - 2.0
                         } else {
-                            rect.bottom()
+                            rect.bottom() + 2.0
                         };
                         ui.painter().with_clip_rect(scroll.inner_rect).line_segment(
                             [pos2(rect.left(), y), pos2(rect.right(), y)],
@@ -594,34 +751,34 @@ impl App {
                 }
             }
         } else {
-            ui.horizontal_wrapped(|ui| {
+            let lists = self.playlists.store.data.playlists.clone();
+            let list_count = lists.len().to_string();
+            ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(l.text("我的歌单", "My playlists"))
                         .size(20.0)
                         .strong(),
                 );
-                ui.label(
-                    RichText::new(self.playlists.store.data.playlists.len().to_string())
-                        .color(MUTED),
-                );
-                if design::control(
-                    ui,
-                    l.text("新建歌单", "New playlist"),
-                    Some(draw_add),
-                    design::Control::Outline,
-                    0.0,
-                )
-                .clicked()
-                {
-                    self.playlists.show_dialog(Dialog::Name {
-                        id: None,
-                        name: String::new(),
-                        pending: vec![],
-                    });
-                }
+                ui.label(RichText::new(&list_count).color(MUTED));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if design::control(
+                        ui,
+                        l.text("新建歌单", "New playlist"),
+                        Some(draw_add),
+                        design::Control::Outline,
+                        0.0,
+                    )
+                    .clicked()
+                    {
+                        self.playlists.show_dialog(Dialog::Name {
+                            id: None,
+                            name: String::new(),
+                            pending: vec![],
+                        });
+                    }
+                });
             });
-            ui.add_space(10.0);
-            let lists = self.playlists.store.data.playlists.clone();
+            ui.add_space(12.0);
             if lists.is_empty() {
                 design::empty_state(
                     ui,
@@ -631,6 +788,7 @@ impl App {
                         "Create a playlist for your favorite songs",
                     ),
                 );
+                return;
             }
             design::scroll()
                 .id_salt("playlist-cards")
@@ -639,20 +797,19 @@ impl App {
                     let columns = (ui.available_width() / 180.0).floor().clamp(1.0, 5.0) as usize;
                     let width = (ui.available_width() - 12.0 * columns.saturating_sub(1) as f32)
                         / columns as f32;
+                    let art_height = width - 2.0 * design::CARD_PADDING;
                     for row in lists.chunks(columns) {
                         ui.horizontal_top(|ui| {
                             for playlist in row {
                                 ui.push_id(&playlist.id, |ui| {
                                     let (rect, response) = ui.allocate_exact_size(
-                                        vec2(width, width + 62.0),
+                                        vec2(width, art_height + 62.0 + 2.0 * design::CARD_PADDING),
                                         Sense::click(),
                                     );
                                     design::card_hover(ui, &response, 10);
                                     let content = design::card_content(rect);
-                                    let art = Rect::from_min_size(
-                                        content.min,
-                                        Vec2::splat(content.width()),
-                                    );
+                                    let art =
+                                        Rect::from_min_size(content.min, Vec2::splat(art_height));
                                     self.playlist_cover(ui, art, &playlist.tracks);
                                     let mut labels = child(
                                         ui,
@@ -666,37 +823,101 @@ impl App {
                                         egui::Label::new(RichText::new(&playlist.name).strong())
                                             .truncate(),
                                     );
-                                    labels.label(
-                                        RichText::new(format!(
-                                            "{} {}",
-                                            playlist.tracks.len(),
-                                            l.text("首歌曲", "songs")
-                                        ))
-                                        .small()
-                                        .color(MUTED),
+                                    labels.add(
+                                        egui::Label::new(
+                                            RichText::new(song_count_text(
+                                                l,
+                                                playlist.tracks.len(),
+                                            ))
+                                            .small()
+                                            .color(MUTED),
+                                        )
+                                        .truncate(),
                                     );
-                                    let button_rect = Rect::from_min_size(
-                                        art.right_bottom() - vec2(44.0, 44.0),
-                                        Vec2::splat(36.0),
+                                    let menu_id =
+                                        ui.make_persistent_id(("playlist-card-menu", &playlist.id));
+                                    let menu_open = egui::Popup::is_id_open(ui.ctx(), menu_id);
+                                    let menu_rect = Rect::from_min_size(
+                                        pos2(art.right() - 40.0, art.top() + 8.0),
+                                        Vec2::splat(32.0),
                                     );
-                                    let mut buttons = child(ui, "playlist-play", button_rect);
-                                    let mut played = false;
-                                    if response.hovered() || ui.rect_contains_pointer(button_rect) {
-                                        buttons.add_enabled_ui(!playlist.tracks.is_empty(), |ui| {
-                                            if design::primary_icon_button(
-                                                ui,
+                                    let hovered = response.hovered()
+                                        || ui.rect_contains_pointer(art)
+                                        || ui.rect_contains_pointer(menu_rect)
+                                        || menu_open;
+                                    let mut overlay_clicked = false;
+                                    if hovered {
+                                        let more = design::cover_overlay_button(
+                                            ui,
+                                            ("playlist-more", &playlist.id),
+                                            menu_rect,
+                                            icons::DOTS_THREE,
+                                            l.text("更多", "More"),
+                                            menu_open,
+                                        );
+                                        if more.clicked() {
+                                            overlay_clicked = true;
+                                        }
+                                        egui::Popup::menu(&more).id(menu_id).show(|ui| {
+                                            self.playlist_menu(ui, playlist);
+                                        });
+                                        if !playlist.tracks.is_empty() {
+                                            let play_rect = Rect::from_min_size(
+                                                art.right_bottom() - vec2(44.0, 44.0),
+                                                Vec2::splat(36.0),
+                                            );
+                                            let play = ui.interact(
+                                                play_rect,
+                                                ui.id().with(("playlist-play", &playlist.id)),
+                                                Sense::click(),
+                                            );
+                                            let fill = if play.hovered() {
+                                                ACCENT
+                                            } else {
+                                                Color32::from_black_alpha(185)
+                                            };
+                                            let stroke_color = if play.hovered() {
+                                                ACCENT
+                                            } else {
+                                                Color32::from_white_alpha(38)
+                                            };
+                                            ui.painter().circle_filled(
+                                                play_rect.center(),
+                                                18.0,
+                                                fill,
+                                            );
+                                            ui.painter().circle_stroke(
+                                                play_rect.center(),
+                                                18.0,
+                                                Stroke::new(1.0, stroke_color),
+                                            );
+                                            icons::paint(
+                                                ui.painter(),
+                                                Rect::from_center_size(
+                                                    play_rect.center() + vec2(1.0, 0.0),
+                                                    Vec2::splat(16.0),
+                                                ),
+                                                if play.hovered() {
+                                                    BACKGROUND
+                                                } else {
+                                                    design::TEXT
+                                                },
                                                 icons::PLAY,
-                                                l.text("播放歌单", "Play playlist"),
-                                            )
-                                            .clicked()
+                                            );
+                                            if play
+                                                .on_hover_text(l.text("播放歌单", "Play playlist"))
+                                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                                .clicked()
                                             {
                                                 self.play_playlist(&playlist.id, 0);
-                                                played = true;
+                                                overlay_clicked = true;
                                             }
-                                        });
+                                        }
                                     }
                                     response.context_menu(|ui| self.playlist_menu(ui, playlist));
-                                    if response.on_hover_text(&playlist.name).clicked() && !played {
+                                    if response.on_hover_text(&playlist.name).clicked()
+                                        && !overlay_clicked
+                                    {
                                         self.playlists.selected = Some(playlist.id.clone());
                                     }
                                 });
@@ -737,92 +958,354 @@ impl App {
         };
         let l = self.settings.language;
         let mut close = false;
-        let response = egui::Modal::new(Id::new("playlist-dialog")).show(ctx, |ui| {
-            ui.set_width((ctx.content_rect().width() - 48.0).clamp(200.0, 440.0));
-            match &mut dialog {
-                Dialog::Name { id, name, pending } => {
-                    ui.heading(if id.is_some() {
-                        l.text("重命名歌单", "Rename playlist")
-                    } else {
-                        l.text("新建歌单", "New playlist")
-                    });
-                    let field = design::input_field(
-                        ui,
-                        name,
-                        ui.available_width(),
-                        l.text("例如：通勤、夜间", "For example: Commute, Night"),
-                    );
-                    if !ctx.memory(|m| m.has_focus(field.id)) && !ctx.egui_wants_keyboard_input() {
-                        field.request_focus();
+        let response = egui::Modal::new(Id::new("playlist-dialog"))
+            .frame(design::modal_frame())
+            .show(ctx, |ui| {
+                ui.set_width((ctx.content_rect().width() - 48.0).clamp(240.0, 440.0));
+                match &mut dialog {
+                    Dialog::Name { id, name, pending } => {
+                        design::modal_header(
+                            ui,
+                            if id.is_some() {
+                                l.text("重命名歌单", "Rename playlist")
+                            } else {
+                                l.text("新建歌单", "New playlist")
+                            },
+                            None,
+                        );
+                        let field = design::input_field(
+                            ui,
+                            name,
+                            ui.available_width(),
+                            l.text("例如：通勤、夜间", "For example: Commute, Night"),
+                        );
+                        if !ctx.memory(|m| m.has_focus(field.id))
+                            && !ctx.egui_wants_keyboard_input()
+                        {
+                            field.request_focus();
+                        }
+                        let trimmed_len = name.trim().chars().count();
+                        let valid = !name.trim().is_empty() && trimmed_len <= 40;
+                        if trimmed_len > 40 {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(
+                                    l.text("名称最多 40 个字符", "Use at most 40 characters"),
+                                )
+                                .small()
+                                .color(Color32::LIGHT_RED),
+                            );
+                        }
+                        if !self.playlists.dialog_error.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&self.playlists.dialog_error)
+                                    .small()
+                                    .color(Color32::LIGHT_RED),
+                            );
+                        }
+                        let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                        design::dialog_footer(ui, |ui| {
+                            let submit = ui
+                                .add_enabled_ui(valid, |ui| {
+                                    design::control(
+                                        ui,
+                                        l.text("保存", "Save"),
+                                        None,
+                                        design::Control::Primary,
+                                        0.0,
+                                    )
+                                })
+                                .inner
+                                .clicked();
+                            if valid && (submit || enter) {
+                                // Creating and adding is one durable transaction.
+                                let result =
+                                    self.playlists.store.named(id.as_deref(), name, pending);
+                                match result {
+                                    Ok(created) => {
+                                        if pending.is_empty() && id.is_none() {
+                                            self.playlists.selected = Some(created);
+                                        }
+                                        close = true;
+                                        self.playlists.notice = Some((
+                                            l.text("歌单已保存", "Playlist saved").into(),
+                                            Instant::now(),
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        self.playlists.dialog_error = error.to_string();
+                                    }
+                                }
+                            }
+                            if design::control(
+                                ui,
+                                l.text("取消", "Cancel"),
+                                None,
+                                design::Control::Quiet,
+                                0.0,
+                            )
+                            .clicked()
+                            {
+                                close = true;
+                            }
+                        });
                     }
-                    let valid = !name.trim().is_empty() && name.trim().chars().count() <= 40;
-                    if name.trim().chars().count() > 40 {
-                        ui.label(l.text("名称最多 40 个字符", "Use at most 40 characters"));
-                    }
-                    let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                    ui.horizontal(|ui| {
-                        let submit = ui
-                            .add_enabled_ui(valid, |ui| {
-                                design::control(
+                    Dialog::Choose { record } => {
+                        design::modal_header(
+                            ui,
+                            l.text("添加到歌单", "Add to playlist"),
+                            Some(&record.title),
+                        );
+                        let playlists = self.playlists.store.data.playlists.clone();
+                        if playlists.is_empty() {
+                            ui.label(
+                                RichText::new(l.text(
+                                    "还没有歌单，点击左下角新建",
+                                    "No playlists yet. Create one below.",
+                                ))
+                                .small()
+                                .color(MUTED),
+                            );
+                        } else {
+                            design::scroll()
+                                .id_salt("playlist-choose-scroll")
+                                .max_height(280.0)
+                                .show(ui, |ui| {
+                                    for playlist in playlists {
+                                        let exists = playlist
+                                            .tracks
+                                            .iter()
+                                            .any(|r| identity(r) == identity(record));
+                                        let count_text = song_count_text(l, playlist.tracks.len());
+                                        let badge = exists.then_some(l.text("已添加", "Added"));
+                                        let mut clicked = false;
+                                        ui.add_enabled_ui(!exists, |ui| {
+                                            clicked = design::check_row(
+                                                ui,
+                                                exists,
+                                                false,
+                                                &playlist.name,
+                                                Some(&count_text),
+                                                badge,
+                                                Some(|ui: &mut Ui, thumb: Rect| {
+                                                    self.playlist_cover(
+                                                        ui,
+                                                        thumb,
+                                                        &playlist.tracks,
+                                                    );
+                                                }),
+                                            )
+                                            .clicked();
+                                        });
+                                        if clicked {
+                                            match self
+                                                .playlists
+                                                .store
+                                                .add(&playlist.id, std::slice::from_ref(record))
+                                            {
+                                                Ok(_) => {
+                                                    close = true;
+                                                    self.playlists.notice = Some((
+                                                        format!(
+                                                            "{}「{}」",
+                                                            l.text("已添加到", "Added to "),
+                                                            playlist.name
+                                                        ),
+                                                        Instant::now(),
+                                                    ));
+                                                }
+                                                Err(error) => {
+                                                    self.playlists.dialog_error = error.to_string()
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                        }
+                        if !self.playlists.dialog_error.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&self.playlists.dialog_error)
+                                    .small()
+                                    .color(Color32::LIGHT_RED),
+                            );
+                        }
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            if design::control(
+                                ui,
+                                l.text("新建歌单", "New playlist"),
+                                Some(draw_add),
+                                design::Control::Outline,
+                                0.0,
+                            )
+                            .clicked()
+                            {
+                                self.playlists.show_dialog(Dialog::Name {
+                                    id: None,
+                                    name: String::new(),
+                                    pending: vec![record.as_ref().clone()],
+                                });
+                                close = true;
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if design::control(
                                     ui,
-                                    l.text("保存", "Save"),
+                                    l.text("取消", "Cancel"),
+                                    None,
+                                    design::Control::Quiet,
+                                    0.0,
+                                )
+                                .clicked()
+                                {
+                                    close = true;
+                                }
+                            });
+                        });
+                    }
+                    Dialog::Add {
+                        id,
+                        query,
+                        selected,
+                    } => {
+                        design::modal_header(
+                            ui,
+                            l.text("从收藏添加歌曲", "Add favorite songs"),
+                            None,
+                        );
+                        design::search_field(
+                            ui,
+                            query,
+                            ui.available_width(),
+                            l.text("搜索标题、艺术家或专辑", "Search title, artist or album"),
+                        );
+                        ui.add_space(10.0);
+                        let mut favorites: Vec<_> = self
+                            .records()
+                            .into_iter()
+                            .filter(|r| r.music && r.favorite)
+                            .collect();
+                        library::sort_favorites(&mut favorites);
+                        let existing: HashSet<_> =
+                            self.playlist_records(id).iter().map(identity).collect();
+                        if favorites.is_empty() {
+                            ui.label(
+                                RichText::new(l.text(
+                                    "先收藏喜欢的歌曲，再加入歌单",
+                                    "Favorite songs first, then add them to a playlist",
+                                ))
+                                .small()
+                                .color(MUTED),
+                            );
+                        } else {
+                            let keyword = query.to_lowercase();
+                            design::scroll()
+                                .id_salt("playlist-add-scroll")
+                                .max_height(300.0)
+                                .show(ui, |ui| {
+                                    let mut count = 0;
+                                    for record in &favorites {
+                                        if !format!(
+                                            "{} {} {}",
+                                            record.title, record.artist, record.album
+                                        )
+                                        .to_lowercase()
+                                        .contains(&keyword)
+                                        {
+                                            continue;
+                                        }
+                                        count += 1;
+                                        let key = identity(record);
+                                        let exists = existing.contains(&key);
+                                        let checked = exists || selected.contains(&key);
+                                        let subtitle = if record.artist.is_empty()
+                                            && record.album.is_empty()
+                                        {
+                                            l.text("本地音乐", "Local track").to_owned()
+                                        } else if record.album.is_empty() {
+                                            record.artist.clone()
+                                        } else if record.artist.is_empty() {
+                                            record.album.clone()
+                                        } else {
+                                            format!("{} · {}", record.artist, record.album)
+                                        };
+                                        let badge = exists.then_some(l.text("已添加", "Added"));
+                                        let mut clicked = false;
+                                        ui.add_enabled_ui(!exists, |ui| {
+                                            clicked = design::check_row(
+                                                ui,
+                                                checked,
+                                                true,
+                                                &record.title,
+                                                Some(&subtitle),
+                                                badge,
+                                                Some(|ui: &mut Ui, thumb: Rect| {
+                                                    self.record_art_rounded(
+                                                        ui,
+                                                        thumb,
+                                                        record,
+                                                        egui::CornerRadius::same(6),
+                                                    );
+                                                }),
+                                            )
+                                            .clicked();
+                                        });
+                                        if clicked {
+                                            if selected.contains(&key) {
+                                                selected.remove(&key);
+                                            } else {
+                                                selected.insert(key);
+                                            }
+                                        }
+                                    }
+                                    if count == 0 {
+                                        ui.label(
+                                            RichText::new(l.text(
+                                                "没有匹配的收藏歌曲",
+                                                "No matching favorites",
+                                            ))
+                                            .small()
+                                            .color(MUTED),
+                                        );
+                                    }
+                                });
+                        }
+                        if !self.playlists.dialog_error.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&self.playlists.dialog_error)
+                                    .small()
+                                    .color(Color32::LIGHT_RED),
+                            );
+                        }
+                        let count = selected.len();
+                        let submit_label = action_song_count(l, "添加", "首", "Add", count);
+                        design::dialog_footer(ui, |ui| {
+                            ui.add_enabled_ui(count > 0, |ui| {
+                                if design::control(
+                                    ui,
+                                    &submit_label,
                                     None,
                                     design::Control::Primary,
                                     0.0,
                                 )
-                            })
-                            .inner
-                            .clicked();
-                        if valid && (submit || enter) {
-                            // Creating and adding is one durable transaction.
-                            let result = self.playlists.store.named(id.as_deref(), name, pending);
-                            match result {
-                                Ok(created) => {
-                                    if pending.is_empty() && id.is_none() {
-                                        self.playlists.selected = Some(created);
-                                    }
-                                    close = true;
-                                    self.playlists.notice = Some((
-                                        l.text("歌单已保存", "Playlist saved").into(),
-                                        Instant::now(),
-                                    ));
-                                }
-                                Err(error) => {
-                                    self.playlists.dialog_error = error.to_string();
-                                }
-                            }
-                        }
-                    });
-                }
-                Dialog::Choose { record } => {
-                    ui.heading(l.text("添加到歌单", "Add to playlist"));
-                    ui.add(egui::Label::new(&record.title).truncate());
-                    let playlists = self.playlists.store.data.playlists.clone();
-                    design::scroll().max_height(280.0).show(ui, |ui| {
-                        for playlist in playlists {
-                            let exists = playlist
-                                .tracks
-                                .iter()
-                                .any(|r| identity(r) == identity(record));
-                            ui.add_enabled_ui(!exists, |ui| {
-                                let text = if exists {
-                                    format!("{} · {}", playlist.name, l.text("已添加", "Added"))
-                                } else {
-                                    playlist.name.clone()
-                                };
-                                if design::menu_item(ui, exists, &text).clicked() {
-                                    match self
-                                        .playlists
-                                        .store
-                                        .add(&playlist.id, std::slice::from_ref(record))
-                                    {
-                                        Ok(_) => {
+                                .clicked()
+                                {
+                                    let records: Vec<_> = favorites
+                                        .into_iter()
+                                        .filter(|r| selected.contains(&identity(r)))
+                                        .collect();
+                                    match self.playlists.store.add(id, &records) {
+                                        Ok(added) => {
                                             close = true;
                                             self.playlists.notice = Some((
-                                                format!(
-                                                    "{}「{}」",
-                                                    l.text("已添加到", "Added to "),
-                                                    playlist.name
+                                                action_song_count(
+                                                    l,
+                                                    "已添加",
+                                                    "首歌曲",
+                                                    "Added",
+                                                    added,
                                                 ),
                                                 Instant::now(),
                                             ));
@@ -833,173 +1316,78 @@ impl App {
                                     }
                                 }
                             });
-                        }
-                    });
-                    if design::control(
-                        ui,
-                        l.text("新建歌单", "New playlist"),
-                        Some(draw_add),
-                        design::Control::Outline,
-                        0.0,
-                    )
-                    .clicked()
-                    {
-                        self.playlists.show_dialog(Dialog::Name {
-                            id: None,
-                            name: String::new(),
-                            pending: vec![record.as_ref().clone()],
-                        });
-                        close = true;
-                    }
-                }
-                Dialog::Add {
-                    id,
-                    query,
-                    selected,
-                } => {
-                    ui.heading(l.text("从收藏添加歌曲", "Add favorite songs"));
-                    design::search_field(
-                        ui,
-                        query,
-                        ui.available_width(),
-                        l.text("搜索标题、艺术家或专辑", "Search title, artist or album"),
-                    );
-                    let mut favorites: Vec<_> = self
-                        .records()
-                        .into_iter()
-                        .filter(|r| r.music && r.favorite)
-                        .collect();
-                    library::sort_favorites(&mut favorites);
-                    let existing: HashSet<_> =
-                        self.playlist_records(id).iter().map(identity).collect();
-                    if favorites.is_empty() {
-                        ui.label(l.text(
-                            "先收藏喜欢的歌曲，再加入歌单",
-                            "Favorite songs first, then add them to a playlist",
-                        ));
-                    }
-                    let keyword = query.to_lowercase();
-                    design::scroll().max_height(300.0).show(ui, |ui| {
-                        let mut count = 0;
-                        for record in &favorites {
-                            if !format!("{} {} {}", record.title, record.artist, record.album)
-                                .to_lowercase()
-                                .contains(&keyword)
+                            if design::control(
+                                ui,
+                                l.text("取消", "Cancel"),
+                                None,
+                                design::Control::Quiet,
+                                0.0,
+                            )
+                            .clicked()
                             {
-                                continue;
-                            }
-                            count += 1;
-                            let key = identity(record);
-                            let exists = existing.contains(&key);
-                            let mut checked = exists || selected.contains(&key);
-                            let label = format!(
-                                "{} · {}{}",
-                                record.title,
-                                record.artist,
-                                if exists {
-                                    l.text("（已添加）", " (added)")
-                                } else {
-                                    ""
-                                }
-                            );
-                            ui.add_enabled_ui(!exists, |ui| {
-                                if ui.checkbox(&mut checked, label).changed() {
-                                    if checked {
-                                        selected.insert(key);
-                                    } else {
-                                        selected.remove(&key);
-                                    }
-                                }
-                            });
-                        }
-                        if count == 0 && !favorites.is_empty() {
-                            ui.label(l.text("没有匹配的收藏歌曲", "No matching favorites"));
-                        }
-                    });
-                    let count = selected.len();
-                    ui.add_enabled_ui(count > 0, |ui| {
-                        if design::control(
-                            ui,
-                            &format!(
-                                "{} {count} {}",
-                                l.text("添加", "Add"),
-                                l.text("首", "songs")
-                            ),
-                            None,
-                            design::Control::Primary,
-                            0.0,
-                        )
-                        .clicked()
-                        {
-                            let records: Vec<_> = favorites
-                                .into_iter()
-                                .filter(|r| selected.contains(&identity(r)))
-                                .collect();
-                            match self.playlists.store.add(id, &records) {
-                                Ok(added) => {
-                                    close = true;
-                                    self.playlists.notice = Some((
-                                        format!(
-                                            "{} {added} {}",
-                                            l.text("已添加", "Added"),
-                                            l.text("首歌曲", "songs")
-                                        ),
-                                        Instant::now(),
-                                    ));
-                                }
-                                Err(error) => self.playlists.dialog_error = error.to_string(),
-                            }
-                        }
-                    });
-                }
-                Dialog::Delete { id, name } => {
-                    ui.heading(l.text("删除歌单", "Delete playlist"));
-                    ui.label(format!("{}「{name}」？", l.text("删除", "Delete ")));
-                    ui.label(l.text(
-                        "歌曲、收藏和文件会保留。",
-                        "Songs, favorites and files will be kept.",
-                    ));
-                    if design::control(
-                        ui,
-                        l.text("删除歌单", "Delete playlist"),
-                        None,
-                        design::Control::Primary,
-                        0.0,
-                    )
-                    .clicked()
-                    {
-                        let result = self.playlists.store.commit(|data| {
-                            data.playlists.retain(|p| p.id != *id);
-                            Ok(())
-                        });
-                        match result {
-                            Ok(()) => {
-                                if self.playlists.selected.as_ref() == Some(id) {
-                                    self.playlists.selected = None;
-                                }
                                 close = true;
                             }
-                            Err(error) => self.playlists.dialog_error = error.to_string(),
+                        });
+                    }
+                    Dialog::Delete { id, name } => {
+                        design::modal_header(ui, l.text("删除歌单", "Delete playlist"), None);
+                        ui.label(format!("{}「{name}」？", l.text("删除", "Delete ")));
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(l.text(
+                                "歌曲、收藏和文件会保留。",
+                                "Songs, favorites and files will be kept.",
+                            ))
+                            .small()
+                            .color(MUTED),
+                        );
+                        if !self.playlists.dialog_error.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(&self.playlists.dialog_error)
+                                    .small()
+                                    .color(Color32::LIGHT_RED),
+                            );
                         }
+                        design::dialog_footer(ui, |ui| {
+                            if design::control(
+                                ui,
+                                l.text("删除歌单", "Delete playlist"),
+                                None,
+                                design::Control::Danger,
+                                0.0,
+                            )
+                            .clicked()
+                            {
+                                let result = self.playlists.store.commit(|data| {
+                                    data.playlists.retain(|p| p.id != *id);
+                                    Ok(())
+                                });
+                                match result {
+                                    Ok(()) => {
+                                        if self.playlists.selected.as_ref() == Some(id) {
+                                            self.playlists.selected = None;
+                                        }
+                                        close = true;
+                                    }
+                                    Err(error) => self.playlists.dialog_error = error.to_string(),
+                                }
+                            }
+                            if design::control(
+                                ui,
+                                l.text("取消", "Cancel"),
+                                None,
+                                design::Control::Quiet,
+                                0.0,
+                            )
+                            .clicked()
+                            {
+                                close = true;
+                            }
+                        });
                     }
                 }
-            }
-            if !self.playlists.dialog_error.is_empty() {
-                ui.label(&self.playlists.dialog_error);
-            }
-            ui.add_space(8.0);
-            if design::control(
-                ui,
-                l.text("取消", "Cancel"),
-                None,
-                design::Control::Quiet,
-                0.0,
-            )
-            .clicked()
-            {
-                close = true;
-            }
-        });
+            });
         if !close && !response.should_close() {
             self.playlists.dialog = Some(dialog);
         }

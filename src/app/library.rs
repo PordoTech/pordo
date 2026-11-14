@@ -397,22 +397,13 @@ impl App {
         }
         ctx.request_repaint_after(remaining);
         let l = self.settings.language;
-        let mut undo = false;
-        egui::Area::new(Id::new("history-undo"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -112.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(SURFACE)
-                    .corner_radius(8)
-                    .inner_margin(12)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(l.text("已删除播放记录", "Playback history removed"));
-                            undo = ui.button(l.text("撤销", "Undo")).clicked();
-                        });
-                    });
-            });
+        let (undo, _) = design::floating_toast(
+            ctx,
+            Id::new("history-undo"),
+            l.text("已删除播放记录", "Playback history removed"),
+            Some(l.text("撤销", "Undo")),
+            None,
+        );
         if undo && let Some((removed, _)) = self.history_undo.take() {
             self.library.restore_history(removed);
         }

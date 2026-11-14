@@ -19,22 +19,30 @@ impl State {
             Tab::Updates => 2,
             Tab::History => 3,
         };
-        design::tabs(
+        design::tabs_with(
             ui,
             &mut selected,
             &[
-                l.text("书架", "Library"),
-                l.text("搜索", "Search"),
-                &format!(
-                    "{}{}",
-                    l.text("更新", "Updates"),
-                    if updates > 0 {
-                        format!(" · {updates}")
-                    } else {
-                        String::new()
-                    }
-                ),
-                l.text("历史", "History"),
+                design::TabItem {
+                    label: l.text("书架", "Library"),
+                    badge: false,
+                    tooltip: None,
+                },
+                design::TabItem {
+                    label: l.text("搜索", "Search"),
+                    badge: false,
+                    tooltip: None,
+                },
+                design::TabItem {
+                    label: l.text("更新", "Updates"),
+                    badge: updates > 0,
+                    tooltip: None,
+                },
+                design::TabItem {
+                    label: l.text("历史", "History"),
+                    badge: false,
+                    tooltip: None,
+                },
             ],
         );
         self.tab = [Tab::Shelf, Tab::Search, Tab::Updates, Tab::History][selected];
@@ -313,7 +321,7 @@ impl State {
                             ui.painter().circle_filled(
                                 cover.min + vec2(12.0, 12.0),
                                 4.0,
-                                Color32::from_rgb(246, 91, 109),
+                                design::BADGE,
                             );
                         }
                         let mut text = workspace::child(

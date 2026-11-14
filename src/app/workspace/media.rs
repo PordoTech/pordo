@@ -91,6 +91,16 @@ impl App {
         self.play_queue(index);
     }
     pub(in crate::app) fn record_art(&mut self, ui: &Ui, rect: Rect, record: &Record) {
+        self.record_art_rounded(ui, rect, record, egui::CornerRadius::same(10));
+    }
+
+    pub(in crate::app) fn record_art_rounded(
+        &mut self,
+        ui: &Ui,
+        rect: Rect,
+        record: &Record,
+        radius: egui::CornerRadius,
+    ) {
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -127,21 +137,21 @@ impl App {
                 })
                 .clone()
         });
-        ui.painter().rect_filled(rect, 10, SURFACE);
+        ui.painter().rect_filled(rect, radius, SURFACE);
         let texture = texture.or_else(|| {
             self.online_video
                 .previews
                 .texture(ui, rect, record.video_cover.as_deref(), false)
         });
         if let Some(texture) = texture {
-            design::cover(ui, &texture, rect, 10);
+            design::cover_rounded(ui, &texture, rect, radius);
         } else {
             let color = if record.music {
                 Color32::from_rgb(45, 67, 62)
             } else {
                 Color32::from_rgb(41, 53, 61)
             };
-            ui.painter().rect_filled(rect, 10, color);
+            ui.painter().rect_filled(rect, radius, color);
             let icon = Rect::from_center_size(
                 rect.center(),
                 Vec2::splat((rect.width() * 0.24).clamp(18.0, 56.0)),
@@ -375,32 +385,7 @@ impl App {
                         }
                     });
                     ui.add_space(10.0);
-                    let (header, _) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-                    for (x, text) in [
-                        (13.0, "#"),
-                        (94.0, l.text("标题 / 艺术家", "Title / artist")),
-                    ] {
-                        ui.painter().text(
-                            pos2(header.min.x + x, header.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            text,
-                            egui::FontId::proportional(12.0),
-                            MUTED,
-                        );
-                    }
-                    if header.width() > 530.0 {
-                        ui.painter().text(
-                            pos2(
-                                header.min.x + header.width() * 0.5 + 12.0,
-                                header.center().y,
-                            ),
-                            egui::Align2::LEFT_CENTER,
-                            l.text("专辑", "Album"),
-                            egui::FontId::proportional(12.0),
-                            MUTED,
-                        );
-                    }
+                    self.track_table_header(ui);
                     for (index, record) in records.iter().enumerate() {
                         self.track_row(ui, record, index, false);
                     }
@@ -426,6 +411,49 @@ impl App {
             }
         });
     }
+    /// Shared column header row for favorite tracks and playlist detail views.
+    pub(in crate::app) fn track_table_header(&self, ui: &mut Ui) {
+        let l = self.settings.language;
+        let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+        for (x, text) in [
+            (13.0, "#"),
+            (94.0, l.text("标题 / 艺术家", "Title / artist")),
+        ] {
+            ui.painter().text(
+                pos2(header.min.x + x, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                egui::FontId::proportional(12.0),
+                MUTED,
+            );
+        }
+        if header.width() > 530.0 {
+            ui.painter().text(
+                pos2(
+                    header.min.x + header.width() * 0.5 + 12.0,
+                    header.center().y,
+                ),
+                egui::Align2::LEFT_CENTER,
+                l.text("专辑", "Album"),
+                egui::FontId::proportional(12.0),
+                MUTED,
+            );
+        }
+        if header.width() > 440.0 {
+            ui.painter().text(
+                pos2(header.max.x - 88.0, header.center().y),
+                egui::Align2::RIGHT_CENTER,
+                l.text("时长", "Duration"),
+                egui::FontId::proportional(12.0),
+                MUTED,
+            );
+        }
+        ui.painter().line_segment(
+            [header.left_bottom(), header.right_bottom()],
+            Stroke::new(1.0, LINE),
+        );
+    }
+
     pub(in crate::app) fn track_row(
         &mut self,
         ui: &mut Ui,

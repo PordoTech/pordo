@@ -1,8 +1,12 @@
-use eframe::egui::{self, Color32, CornerRadius, FontId, Stroke, TextStyle, vec2};
+use eframe::egui::{
+    self, Align, Color32, CornerRadius, FontFamily, FontId, Layout, Margin, Sense, Stroke,
+    TextStyle, Vec2, pos2, vec2,
+};
 
 pub const BACKGROUND: Color32 = Color32::from_rgb(17, 19, 21);
 pub const SURFACE: Color32 = Color32::from_rgb(25, 29, 32);
 pub const ACCENT: Color32 = Color32::from_rgb(169, 224, 205);
+pub const BADGE: Color32 = Color32::from_rgb(246, 91, 109);
 pub const MUTED: Color32 = Color32::from_rgb(146, 154, 157);
 pub const TEXT: Color32 = Color32::from_rgb(238, 240, 236);
 pub const LINE: Color32 = Color32::from_rgb(42, 48, 50);
@@ -12,9 +16,43 @@ pub const FIELD: Color32 = Color32::from_rgb(30, 35, 39);
 pub const FIELD_HOVER: Color32 = Color32::from_rgb(33, 39, 43);
 pub const FIELD_FOCUS: Color32 = Color32::from_rgb(35, 43, 47);
 pub const HOVER: Color32 = Color32::from_rgb(32, 43, 40);
+pub const WARNING_FILL: Color32 = Color32::from_rgb(55, 48, 30);
+pub const WARNING_STROKE: Color32 = Color32::from_rgb(105, 90, 48);
+pub const WARNING_TEXT: Color32 = Color32::from_rgb(230, 210, 155);
+pub const ERROR_FILL: Color32 = Color32::from_rgb(48, 28, 30);
+pub const ERROR_STROKE: Color32 = Color32::from_rgb(104, 52, 56);
+pub const DANGER_FILL: Color32 = Color32::from_rgb(180, 60, 72);
+pub const DANGER_HOVER: Color32 = Color32::from_rgb(200, 72, 84);
+pub const DANGER_TEXT: Color32 = Color32::from_rgb(252, 245, 245);
 pub const CONTROL_HEIGHT: f32 = 36.0;
+pub const COMPACT_CONTROL_HEIGHT: f32 = 30.0;
 pub const NAV_ITEM_HEIGHT: f32 = 38.0;
 pub const CARD_PADDING: f32 = 8.0;
+
+pub fn strong_family() -> FontFamily {
+    FontFamily::Name("strong".into())
+}
+
+/// Returns the strong font family when registered by [`super::setup_fonts`],
+/// falling back to proportional in isolated tests.
+pub fn strong_font_id(ui: &egui::Ui, size: f32) -> FontId {
+    let family = strong_family();
+    let has_strong = ui.ctx().fonts(|fonts| {
+        fonts
+            .definitions()
+            .families
+            .get(&family)
+            .is_some_and(|list| !list.is_empty())
+    });
+    FontId::new(
+        size,
+        if has_strong {
+            family
+        } else {
+            FontFamily::Proportional
+        },
+    )
+}
 
 pub fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
     let (rect, mut response) =
@@ -677,15 +715,27 @@ pub fn nav_item(
     }
 }
 
-pub fn empty_state(ui: &mut egui::Ui, glyph: &str, title: &str) {
+/// Centers an icon and message, plus optional action or caption widgets below.
+pub fn empty_state_with(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    title: &str,
+    footer: impl FnOnce(&mut egui::Ui),
+) {
     ui.vertical_centered(|ui| {
         ui.add_space(28.0);
         let (icon_rect, _) = ui.allocate_exact_size(vec2(34.0, 34.0), egui::Sense::hover());
         super::icons::paint(ui.painter(), icon_rect, MUTED.gamma_multiply(0.65), glyph);
         ui.add_space(8.0);
         ui.label(egui::RichText::new(title).size(14.0).color(MUTED));
+        ui.add_space(12.0);
+        footer(ui);
         ui.add_space(16.0);
     });
+}
+
+pub fn empty_state(ui: &mut egui::Ui, glyph: &str, title: &str) {
+    empty_state_with(ui, glyph, title, |_| {});
 }
 
 pub fn search_field(
@@ -835,7 +885,26 @@ pub fn card_hover(ui: &egui::Ui, response: &egui::Response, radius: u8) {
         .on_hover_cursor(egui::CursorIcon::PointingHand);
 }
 
+pub struct TabItem<'a> {
+    pub label: &'a str,
+    pub badge: bool,
+    pub tooltip: Option<&'a str>,
+}
+
 pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
+    let items: Vec<_> = labels
+        .iter()
+        .map(|label| TabItem {
+            label,
+            badge: false,
+            tooltip: None,
+        })
+        .collect();
+    tabs_with(ui, selected, &items)
+}
+
+/// Horizontal tab bar supporting an optional top-right red dot badge and per-tab tooltip.
+pub fn tabs_with(ui: &mut egui::Ui, selected: &mut usize, items: &[TabItem<'_>]) -> bool {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), egui::Sense::hover());
     ui.painter().line_segment(
         [rect.left_bottom(), rect.right_bottom()],
@@ -843,37 +912,48 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
     );
     let mut x = rect.min.x;
     let mut changed = false;
-    for (index, label) in labels.iter().enumerate() {
+    for (index, item) in items.iter().enumerate() {
         let text = ui.painter().layout_no_wrap(
-            (*label).into(),
+            item.label.into(),
             FontId::proportional(14.0),
             if *selected == index { ACCENT } else { MUTED },
         );
-        let width = (text.size().x + 20.0).max(54.0);
+        let text_size = text.size();
+        let width = (text_size.x + 20.0).max(54.0);
         let tab = egui::Rect::from_min_size(egui::pos2(x, rect.min.y), vec2(width, 36.0));
-        let response = ui
+        let mut response = ui
             .interact(tab, ui.id().with(("tab", index)), egui::Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if let Some(tip) = item.tooltip {
+            response = response.on_hover_text(tip);
+        }
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::SelectableLabel,
                 ui.is_enabled(),
                 *selected == index,
-                *label,
+                item.label,
             )
         });
         if response.hovered() {
             ui.painter()
                 .rect_filled(tab.shrink2(vec2(0.0, 3.0)), 6, SURFACE);
         }
-        ui.painter().galley(
-            egui::pos2(
-                tab.center().x - text.size().x * 0.5,
-                tab.center().y - text.size().y * 0.5,
-            ),
-            text,
-            TEXT,
+        let text_pos = egui::pos2(
+            tab.center().x - text_size.x * 0.5,
+            tab.center().y - text_size.y * 0.5,
         );
+        ui.painter().galley(text_pos, text, TEXT);
+        if item.badge {
+            ui.painter().circle_filled(
+                pos2(
+                    (text_pos.x + text_size.x + 4.0).min(tab.max.x - 4.0),
+                    (text_pos.y + 1.5).max(tab.min.y + 5.0),
+                ),
+                3.0,
+                BADGE,
+            );
+        }
         if *selected == index {
             ui.painter().line_segment(
                 [
@@ -892,9 +972,14 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
     changed
 }
 
-/// Crop artwork to fill a tile without stretching, using the same corner radius
-/// for music covers, video thumbnails and compact transport artwork.
-pub fn cover(ui: &egui::Ui, texture: &egui::TextureHandle, rect: egui::Rect, radius: u8) {
+/// Crop artwork to fill a tile with per-corner rounding for music covers,
+/// playlist collages, video thumbnails and compact transport artwork.
+pub fn cover_rounded(
+    ui: &egui::Ui,
+    texture: &egui::TextureHandle,
+    rect: egui::Rect,
+    radius: CornerRadius,
+) {
     let size = texture.size_vec2();
     let image_ratio = size.x / size.y.max(1.0);
     let tile_ratio = rect.width() / rect.height().max(1.0);
@@ -908,6 +993,11 @@ pub fn cover(ui: &egui::Ui, texture: &egui::TextureHandle, rect: egui::Rect, rad
         .uv(uv)
         .corner_radius(radius)
         .paint_at(ui, rect);
+}
+
+/// Crop artwork to fill a tile without stretching, using uniform corner rounding.
+pub fn cover(ui: &egui::Ui, texture: &egui::TextureHandle, rect: egui::Rect, radius: u8) {
+    cover_rounded(ui, texture, rect, CornerRadius::same(radius));
 }
 
 pub fn apply(ctx: &egui::Context) {
@@ -987,6 +1077,7 @@ pub enum Control {
     Primary,
     Outline,
     Quiet,
+    Danger,
 }
 
 /// Navigation back actions use the same icon-only target in every workspace.
@@ -1152,25 +1243,57 @@ pub fn control(
     kind: Control,
     width: f32,
 ) -> egui::Response {
+    control_sized(ui, label, icon, kind, width, CONTROL_HEIGHT)
+}
+
+/// Compact pill control for secondary group headers and inline banners.
+pub fn compact_control(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: Option<Icon>,
+    kind: Control,
+) -> egui::Response {
+    control_sized(ui, label, icon, kind, 0.0, COMPACT_CONTROL_HEIGHT)
+}
+
+/// Core control renderer parameterized by explicit height.
+pub fn control_sized(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: Option<Icon>,
+    kind: Control,
+    width: f32,
+    height: f32,
+) -> egui::Response {
     let font = TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(label.into(), font, TEXT);
     let width = if width > 0.0 {
         width
+    } else if height < CONTROL_HEIGHT {
+        (galley.size().x
+            + if icon.is_some() && !label.is_empty() {
+                22.0
+            } else {
+                0.0
+            }
+            + 20.0)
+            .ceil()
+            .max(height)
     } else {
         control_width(ui, label, icon.is_some())
     };
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(width, CONTROL_HEIGHT), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
     let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+    let radius = if height < CONTROL_HEIGHT { 7 } else { 8 };
     let fill = if hovered { SELECTED } else { SURFACE };
     match kind {
         Control::Primary => {
             ui.painter().rect_filled(
                 rect,
-                8,
+                radius,
                 if !ui.is_enabled() {
                     ACCENT.gamma_multiply(0.45)
                 } else if hovered {
@@ -1180,22 +1303,50 @@ pub fn control(
                 },
             );
         }
+        Control::Danger => {
+            ui.painter().rect_filled(
+                rect,
+                radius,
+                if !ui.is_enabled() {
+                    DANGER_FILL.gamma_multiply(0.45)
+                } else if hovered {
+                    DANGER_HOVER
+                } else {
+                    DANGER_FILL
+                },
+            );
+        }
         Control::Outline => {
-            ui.painter().rect_filled(rect, 8, fill);
+            ui.painter().rect_filled(rect, radius, fill);
             ui.painter().rect_stroke(
                 rect,
-                8,
-                Stroke::new(1.0, if hovered { ACCENT } else { LINE }),
+                radius,
+                Stroke::new(
+                    1.0,
+                    if hovered {
+                        ACCENT
+                    } else if height < CONTROL_HEIGHT {
+                        BORDER
+                    } else {
+                        LINE
+                    },
+                ),
                 egui::StrokeKind::Inside,
             );
         }
         Control::Quiet if hovered => {
-            ui.painter().rect_filled(rect, 8, HOVER);
+            ui.painter().rect_filled(rect, radius, HOVER);
         }
         Control::Quiet => {}
     }
     let color = if matches!(kind, Control::Primary) {
         BACKGROUND
+    } else if matches!(kind, Control::Danger) {
+        if ui.is_enabled() {
+            DANGER_TEXT
+        } else {
+            DANGER_TEXT.gamma_multiply(0.55)
+        }
     } else if !ui.is_enabled() {
         MUTED.gamma_multiply(0.5)
     } else if hovered {
@@ -1203,21 +1354,29 @@ pub fn control(
     } else {
         Color32::from_rgb(204, 211, 211)
     };
+    let icon_offset = if height < CONTROL_HEIGHT { 17.0 } else { 20.0 };
+    let label_offset = if height < CONTROL_HEIGHT { 29.0 } else { 34.0 };
     if let Some(icon) = icon {
         let center = if label.is_empty() {
             rect.center()
         } else {
-            egui::pos2(rect.min.x + 20.0, rect.center().y)
+            egui::pos2(rect.min.x + icon_offset, rect.center().y)
         };
         icon(
             ui.painter(),
-            egui::Rect::from_center_size(center, vec2(16.0, 16.0)),
+            egui::Rect::from_center_size(
+                center,
+                vec2(
+                    if height < CONTROL_HEIGHT { 14.0 } else { 16.0 },
+                    if height < CONTROL_HEIGHT { 14.0 } else { 16.0 },
+                ),
+            ),
             color,
         );
     }
     if !label.is_empty() {
         let x = if icon.is_some() {
-            rect.min.x + 34.0
+            rect.min.x + label_offset
         } else {
             rect.center().x - galley.size().x * 0.5
         };
@@ -1231,6 +1390,334 @@ pub fn control(
         );
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Standard dark modal frame matching the update dialog.
+pub fn modal_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(SURFACE)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(12)
+        .inner_margin(22)
+}
+
+/// Modal title and optional muted subtitle with consistent breathing space.
+pub fn modal_header(ui: &mut egui::Ui, title: &str, subtitle: Option<&str>) {
+    ui.label(egui::RichText::new(title).size(20.0).strong());
+    if let Some(subtitle) = subtitle {
+        ui.add_space(2.0);
+        ui.add(egui::Label::new(egui::RichText::new(subtitle).small().color(MUTED)).truncate());
+    }
+    ui.add_space(12.0);
+}
+
+/// Right-aligned modal button row (add Primary/Danger first so it sits rightmost).
+pub fn dialog_footer(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(14.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        add_contents(ui);
+    });
+}
+
+/// Inline alert banner matching the workspace error/warning style. Returns
+/// `(action_clicked, dismiss_clicked)`.
+pub fn alert_banner(
+    ui: &mut egui::Ui,
+    warning: bool,
+    message: &str,
+    action_label: Option<&str>,
+    dismiss_tooltip: Option<&str>,
+) -> (bool, bool) {
+    let mut action_clicked = false;
+    let mut dismiss_clicked = false;
+    let (fill, stroke, text_color) = if warning {
+        (WARNING_FILL, WARNING_STROKE, WARNING_TEXT)
+    } else {
+        (ERROR_FILL, ERROR_STROKE, Color32::LIGHT_RED)
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, stroke))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(14, 8))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let reserve = action_label
+                    .map(|l| control_width(ui, l, false) + 12.0)
+                    .unwrap_or(0.0)
+                    + if dismiss_tooltip.is_some() { 34.0 } else { 0.0 };
+                ui.allocate_ui_with_layout(
+                    vec2(
+                        (ui.available_width() - reserve).max(80.0),
+                        COMPACT_CONTROL_HEIGHT,
+                    ),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(message).small().color(text_color),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(message);
+                    },
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if let Some(tip) = dismiss_tooltip
+                        && compact_icon_button(ui, super::icons::X, tip, false).clicked()
+                    {
+                        dismiss_clicked = true;
+                    }
+                    if let Some(action) = action_label
+                        && compact_control(ui, action, None, Control::Outline).clicked()
+                    {
+                        action_clicked = true;
+                    }
+                });
+            });
+        });
+    (action_clicked, dismiss_clicked)
+}
+
+/// Floating bottom-right toast notice for undoable or transient feedback without shifting layout.
+/// Returns `(action_clicked, dismiss_clicked)`.
+pub fn floating_toast(
+    ctx: &egui::Context,
+    id: egui::Id,
+    message: &str,
+    action_label: Option<&str>,
+    dismiss_tooltip: Option<&str>,
+) -> (bool, bool) {
+    let mut action_clicked = false;
+    let mut dismiss_clicked = false;
+    egui::Area::new(id)
+        .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -112.0))
+        .order(egui::Order::Foreground)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(SURFACE)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(8)
+                .inner_margin(Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.label(egui::RichText::new(message).color(TEXT));
+                        if let Some(action) = action_label
+                            && compact_control(ui, action, None, Control::Outline).clicked()
+                        {
+                            action_clicked = true;
+                        }
+                        if let Some(tip) = dismiss_tooltip
+                            && compact_icon_button(ui, super::icons::X, tip, false).clicked()
+                        {
+                            dismiss_clicked = true;
+                        }
+                    });
+                });
+        });
+    (action_clicked, dismiss_clicked)
+}
+
+/// Circular creator/user avatar with an initial fallback matching `creator_card`.
+pub fn initial_avatar(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    texture: Option<&egui::TextureHandle>,
+    name: &str,
+) {
+    if let Some(texture) = texture {
+        cover(
+            ui,
+            texture,
+            rect,
+            (rect.width() * 0.5).ceil().min(255.0) as u8,
+        );
+    } else {
+        ui.painter().circle_filled(
+            rect.center(),
+            rect.width() * 0.5,
+            Color32::from_rgb(45, 68, 63),
+        );
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            name.chars().next().unwrap_or('U'),
+            FontId::proportional((rect.width() * 0.42).max(12.0)),
+            ACCENT,
+        );
+    }
+}
+
+/// Dark translucent `32x32` overlay icon button anchored inside card artwork.
+pub fn cover_overlay_button(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    rect: egui::Rect,
+    glyph: &str,
+    tooltip: &str,
+    active: bool,
+) -> egui::Response {
+    ui.painter()
+        .rect_filled(rect, 7, Color32::from_black_alpha(175));
+    ui.painter().rect_stroke(
+        rect,
+        7,
+        Stroke::new(1.0, Color32::from_white_alpha(28)),
+        egui::StrokeKind::Inside,
+    );
+    let mut slot = super::workspace::child(ui, id, rect);
+    icon_button_sized(
+        &mut slot,
+        rect.width().min(rect.height()),
+        1.0,
+        active,
+        tooltip,
+        |p, r, c| {
+            super::icons::paint(p, r, c, glyph);
+        },
+    )
+}
+
+/// Selectable list row with a custom checkbox indicator, optional thumbnail slot,
+/// 2-line title/subtitle hierarchy and optional trailing badge.
+pub fn check_row(
+    ui: &mut egui::Ui,
+    checked: bool,
+    show_checkbox: bool,
+    title: &str,
+    subtitle: Option<&str>,
+    badge: Option<&str>,
+    draw_thumb: Option<impl FnOnce(&mut egui::Ui, egui::Rect)>,
+) -> egui::Response {
+    let enabled = ui.is_enabled();
+    let height = if subtitle.is_some() { 54.0 } else { 40.0 };
+    let width = ui.available_width().max(120.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, checked, title)
+    });
+    let hovered = enabled && response.hovered();
+    if (enabled && checked) || hovered {
+        ui.painter().rect_filled(
+            rect,
+            8,
+            if enabled && checked && show_checkbox {
+                SELECTED
+            } else if enabled && checked {
+                SELECTED.gamma_multiply(0.65)
+            } else {
+                HOVER
+            },
+        );
+    }
+    let mut x = rect.min.x + 10.0;
+    if show_checkbox {
+        let box_rect =
+            egui::Rect::from_center_size(pos2(x + 9.0, rect.center().y), Vec2::splat(18.0));
+        if checked {
+            let fill = if enabled {
+                ACCENT
+            } else {
+                ACCENT.gamma_multiply(0.35)
+            };
+            ui.painter().rect_filled(box_rect, 5, fill);
+            super::icons::paint(
+                ui.painter(),
+                box_rect.shrink(3.0),
+                BACKGROUND,
+                super::icons::CHECK,
+            );
+        } else {
+            ui.painter().rect_filled(box_rect, 5, FIELD);
+            ui.painter().rect_stroke(
+                box_rect,
+                5,
+                Stroke::new(1.2, if hovered { ACCENT } else { BORDER }),
+                egui::StrokeKind::Inside,
+            );
+        }
+        x = box_rect.max.x + 10.0;
+    }
+    if let Some(draw) = draw_thumb {
+        let side = if subtitle.is_some() { 36.0 } else { 26.0 };
+        let thumb =
+            egui::Rect::from_center_size(pos2(x + side * 0.5, rect.center().y), Vec2::splat(side));
+        draw(ui, thumb);
+        x = thumb.max.x + 10.0;
+    }
+    let badge_galley = badge.map(|text| {
+        ui.painter()
+            .layout_no_wrap(text.into(), FontId::proportional(12.0), MUTED)
+    });
+    let right_limit = rect.max.x - 10.0 - badge_galley.as_ref().map_or(0.0, |g| g.size().x + 10.0);
+    if let Some(badge_galley) = badge_galley {
+        let size = badge_galley.size();
+        ui.painter().galley(
+            pos2(rect.max.x - 10.0 - size.x, rect.center().y - size.y * 0.5),
+            badge_galley,
+            MUTED,
+        );
+    }
+    let text_width = (right_limit - x).max(40.0);
+    let clip = egui::Rect::from_min_max(pos2(x, rect.min.y), pos2(right_limit, rect.max.y))
+        .intersect(ui.clip_rect());
+    let title_color = if !enabled {
+        MUTED.gamma_multiply(0.7)
+    } else if checked && show_checkbox {
+        ACCENT
+    } else {
+        TEXT
+    };
+    let mut title_job = egui::text::LayoutJob::simple(
+        title.into(),
+        FontId::proportional(14.0),
+        title_color,
+        text_width,
+    );
+    title_job.wrap.max_rows = 1;
+    title_job.wrap.overflow_character = Some('…');
+    let title_galley = ui.painter().layout_job(title_job);
+    if let Some(subtitle) = subtitle {
+        let sub_color = if enabled {
+            MUTED
+        } else {
+            MUTED.gamma_multiply(0.6)
+        };
+        let mut sub_job = egui::text::LayoutJob::simple(
+            subtitle.into(),
+            FontId::proportional(12.0),
+            sub_color,
+            text_width,
+        );
+        sub_job.wrap.max_rows = 1;
+        sub_job.wrap.overflow_character = Some('…');
+        let sub_galley = ui.painter().layout_job(sub_job);
+        let total_h = title_galley.size().y + 2.0 + sub_galley.size().y;
+        let top = rect.center().y - total_h * 0.5;
+        ui.painter()
+            .with_clip_rect(clip)
+            .galley(pos2(x, top), title_galley, title_color);
+        ui.painter()
+            .with_clip_rect(clip)
+            .galley(pos2(x, top + 19.0), sub_galley, sub_color);
+    } else {
+        let h = title_galley.size().y;
+        ui.painter().with_clip_rect(clip).galley(
+            pos2(x, rect.center().y - h * 0.5),
+            title_galley,
+            title_color,
+        );
+    }
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 pub fn segmented(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {

@@ -479,7 +479,9 @@ pub(super) fn video_card<Tz: chrono::TimeZone>(
     now: &chrono::DateTime<Tz>,
 ) -> Response {
     let cover_height = (width - 16.0) * 9.0 / 16.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, cover_height + 76.0), Sense::click());
+    let footer_gap = if show_uploader { 76.0 } else { 68.0 };
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(width, cover_height + footer_gap), Sense::click());
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(&video.title);
@@ -574,19 +576,8 @@ fn creator_card(
         return None;
     }
     let avatar = Rect::from_min_size(rect.min + vec2(10.0, 12.0), vec2(40.0, 40.0));
-    if let Some(texture) = previews.texture(ui, avatar, creator.avatar.as_deref(), true) {
-        design::cover(ui, &texture, avatar, 20);
-    } else {
-        ui.painter()
-            .circle_filled(avatar.center(), 20.0, Color32::from_rgb(45, 68, 63));
-        ui.painter().text(
-            avatar.center(),
-            egui::Align2::CENTER_CENTER,
-            creator.uname.chars().next().unwrap_or('U'),
-            FontId::proportional(16.0),
-            ACCENT,
-        );
-    }
+    let texture = previews.texture(ui, avatar, creator.avatar.as_deref(), true);
+    design::initial_avatar(ui, avatar, texture.as_ref(), &creator.uname);
     let x = avatar.max.x + 8.0;
     let text_width = (rect.max.x - x - 34.0).max(20.0);
     lines(

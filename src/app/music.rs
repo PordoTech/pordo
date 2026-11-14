@@ -656,53 +656,233 @@ impl App {
         let mut ui = root.new_child(
             UiBuilder::new()
                 .id_salt("lyrics-panel")
-                .max_rect(rect.shrink(10.0))
+                .max_rect(rect.shrink2(vec2(24.0, 12.0)))
                 .layout(Layout::top_down(Align::Min)),
         );
         ui.set_clip_rect(rect.intersect(root.clip_rect()));
         let current = self.lyrics.current_index(position);
         let synced = self.lyrics.synced;
+        let user_wheel = ui.input(|i| {
+            i.pointer.hover_pos().is_some_and(|p| rect.contains(p))
+                && i.raw.events.iter().any(
+                    |e| matches!(e, egui::Event::MouseWheel { delta, .. } if delta.y.abs() > 0.01),
+                )
+        });
         let mut follow = self.lyrics_follow;
+        let mut scrolled_to = self.lyrics_scrolled_to;
+        if synced && user_wheel {
+            follow = false;
+        }
         let mut seek = None;
         let height = rect.height();
-        design::scroll()
+        let scroll = design::scroll()
             .id_salt("lyrics-scroll")
             .auto_shrink([false, false])
             .show(&mut ui, |ui| {
-                ui.add_space((height * 0.3).max(8.0));
+                ui.add_space((height * 0.28).max(12.0));
                 for (index, line) in self.lyrics.lines.iter().enumerate() {
                     let active = current == Some(index);
-                    let mut text = RichText::new(&line.text)
-                        .size(if active { 26.0 } else { 22.0 })
-                        .color(if active { design::TEXT } else { MUTED });
-                    if active {
-                        text = text.strong();
-                    }
-                    let mut response = ui.add(egui::Label::new(text).selectable(false));
+                    let font = if active {
+                        design::strong_font_id(ui, 23.0)
+                    } else {
+                        egui::FontId::proportional(18.0)
+                    };
+                    let color = if active {
+                        design::TEXT
+                    } else if synced {
+                        MUTED
+                    } else {
+                        design::TEXT.gamma_multiply(0.82)
+                    };
+                    let hover_bg = ui.painter().add(egui::Shape::Noop);
+                    let mut response = ui.add(
+                        egui::Label::new(RichText::new(&line.text).font(font).color(color))
+                            .selectable(false)
+                            .wrap(),
+                    );
                     if synced {
+                        if response.hovered() {
+                            ui.painter().set(
+                                hover_bg,
+                                egui::Shape::rect_filled(
+                                    response.rect.expand2(vec2(8.0, 4.0)),
+                                    8,
+                                    design::HOVER,
+                                ),
+                            );
+                        }
                         response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if response.clicked() {
                             seek = Some(line.time);
-                            // Jumping to a line resumes auto-scroll from there.
                             follow = true;
+                            scrolled_to = None;
                         }
                     }
-                    if active && follow {
+                    if active && follow && scrolled_to != current {
                         ui.scroll_to_rect(response.rect, Some(Align::Center));
+                        scrolled_to = current;
                     }
-                    ui.add_space(22.0);
+                    ui.add_space(16.0);
                 }
-                ui.add_space((height * 0.5).max(8.0));
+                ui.add_space((height * 0.45).max(16.0));
             });
-        if ui.input(|i| {
-            i.smooth_scroll_delta().y.abs() > 0.5
-                && i.pointer.hover_pos().is_some_and(|p| rect.contains(p))
-        }) {
+        if synced
+            && follow
+            && ui.input(|i| {
+                i.pointer.any_down()
+                    && i.pointer
+                        .hover_pos()
+                        .is_some_and(|p| rect.contains(p) && !scroll.inner_rect.contains(p))
+            })
+        {
             follow = false;
         }
+        if synced && !follow {
+            let mut bar = root.new_child(
+                UiBuilder::new()
+                    .id_salt("lyrics-sync-bar")
+                    .max_rect(rect.shrink(16.0))
+                    .layout(Layout::bottom_up(Align::Max)),
+            );
+            bar.set_clip_rect(rect.intersect(root.clip_rect()));
+            if design::compact_control(
+                &mut bar,
+                self.settings.language.text("回到当前", "Sync"),
+                Some(icons::refresh),
+                design::Control::Outline,
+            )
+            .clicked()
+            {
+                follow = true;
+                scrolled_to = None;
+                ui.ctx().request_repaint();
+            }
+        }
         self.lyrics_follow = follow;
+        self.lyrics_scrolled_to = scrolled_to;
         if let Some(time) = seek {
             *act = Act::Seek(time);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::comic::visual_tests::settings_fixture;
+
+    fn run_lyrics_frame(
+        app: &mut App,
+        ctx: &egui::Context,
+        rect: Rect,
+        position: f64,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, Act) {
+        let mut act = Act::None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(960.0, 640.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.lyrics_panel(ui, rect, position, &mut act);
+            },
+        );
+        output.textures_delta.clear();
+        (output, act)
+    }
+
+    #[test]
+    fn lyrics_follow_advances_pauses_on_wheel_and_resumes_on_sync() {
+        let ctx = egui::Context::default();
+        let mut app = settings_fixture(&ctx);
+        app.settings.language = Language::English;
+        app.lyrics = crate::lyrics::Lyrics::parse(
+            &(0..60)
+                .map(|i| format!("[00:{i:02}.00]Lyric line {i}\n"))
+                .collect::<String>(),
+        );
+        let rect = Rect::from_min_size(pos2(440.0, 80.0), vec2(480.0, 460.0));
+        run_lyrics_frame(&mut app, &ctx, rect, 0.0, vec![]);
+        run_lyrics_frame(&mut app, &ctx, rect, 30.0, vec![]);
+        assert!(app.lyrics_follow);
+        assert_eq!(app.lyrics_scrolled_to, Some(30));
+
+        // Wheel scroll inside the lyrics rect pauses follow before ScrollArea drains delta.
+        run_lyrics_frame(
+            &mut app,
+            &ctx,
+            rect,
+            30.0,
+            vec![
+                egui::Event::PointerMoved(rect.center()),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 48.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        assert!(!app.lyrics_follow);
+
+        let (output, _) = run_lyrics_frame(&mut app, &ctx, rect, 40.0, vec![]);
+        assert!(!app.lyrics_follow);
+        assert_eq!(app.lyrics_scrolled_to, Some(30));
+
+        let sync_pos = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Sync" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Sync pill should be shown when auto-follow is paused");
+
+        run_lyrics_frame(
+            &mut app,
+            &ctx,
+            rect,
+            40.0,
+            vec![
+                egui::Event::PointerMoved(sync_pos),
+                egui::Event::PointerButton {
+                    pos: sync_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        run_lyrics_frame(
+            &mut app,
+            &ctx,
+            rect,
+            40.0,
+            vec![egui::Event::PointerButton {
+                pos: sync_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(app.lyrics_follow);
+
+        let (output, _) = run_lyrics_frame(&mut app, &ctx, rect, 40.0, vec![]);
+        assert_eq!(app.lyrics_scrolled_to, Some(40));
+        assert!(
+            !output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Sync"))
+        );
+
+        app.lyrics_follow = false;
+        app.reset_lyrics_follow();
+        assert!(app.lyrics_follow);
+        assert_eq!(app.lyrics_scrolled_to, None);
     }
 }

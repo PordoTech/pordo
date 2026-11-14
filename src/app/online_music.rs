@@ -207,6 +207,7 @@ impl App {
         self.subtitle_job = None;
         self.subtitles.clear();
         self.lyrics = Default::default();
+        self.reset_lyrics_follow();
         self.lyric_generation = Default::default();
         self.video.clear();
         self.loading = true;
@@ -308,6 +309,7 @@ impl App {
                 .bind_online(path.to_string_lossy().into_owned(), song);
             if active && self.lyric_generation.cues.is_empty() {
                 self.lyrics = crate::lyrics::Lyrics::load_for(&path).unwrap_or_default();
+                self.reset_lyrics_follow();
             }
         }
         self.metadata_cache.remove(path.to_string_lossy().as_ref());
