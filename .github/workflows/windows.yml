@@ -14,6 +14,8 @@ on:
 permissions:
   contents: read
 env:
+  # Keep release linting and SDK builds on the locally validated compiler.
+  PORDO_RUST_TOOLCHAIN: '1.99.1'
   # PR merge refs disappear after merging; keep queued builds on the event's
   # immutable commit (the tested merge commit for pull_request events).
   RELEASE_SOURCE_REF: ${{ inputs.release_tag || github.sha }}
@@ -45,6 +47,8 @@ jobs:
           ref: ${{ steps.sdk.outputs.revision }}
           path: .deps/remdia-source
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.PORDO_RUST_TOOLCHAIN }}
       - uses: actions/cache@v4
         with:
           path: |
@@ -88,6 +92,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.PORDO_RUST_TOOLCHAIN }}
           components: rustfmt, clippy
       - uses: actions/cache/restore@v4
         id: rust-cache
@@ -212,6 +217,7 @@ jobs:
           ref: ${{ env.RELEASE_SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.PORDO_RUST_TOOLCHAIN }}
           components: rustfmt, clippy
           targets: ${{ matrix.target }}
       - name: Check formatting and release version
@@ -330,6 +336,7 @@ jobs:
           log-accepted-android-sdk-licenses: 'false'
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.PORDO_RUST_TOOLCHAIN }}
           targets: aarch64-linux-android
       - uses: actions/cache@v4
         with:
