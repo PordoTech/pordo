@@ -46,7 +46,69 @@ fn saving_failure_rolls_back_key_changes_and_deletions() {
 }
 
 #[test]
-#[ignore = "Writes and removes a temporary test-only OS credential"]
+fn file_credentials_survive_restart_clear_explicitly_and_restrict_permissions() {
+    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/test-data")
+        .join(uuid::Uuid::new_v4().to_string());
+    let path = directory.join("credentials.json");
+    let vault = FileVault::isolated(path.clone());
+    vault.set("api/provider", Some("test-only-key")).unwrap();
+    vault
+        .set("sync/password", Some("test-only-password"))
+        .unwrap();
+    let reopened = FileVault::isolated(path.clone());
+    assert_eq!(
+        reopened.get("api/provider").unwrap().as_deref(),
+        Some("test-only-key")
+    );
+    reopened.set("api/provider", None).unwrap();
+    assert!(
+        FileVault::isolated(path.clone())
+            .get("api/provider")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        reopened.get("sync/password").unwrap().as_deref(),
+        Some("test-only-password")
+    );
+    reopened
+        .finish_migration(&["sync/password".into(), "missing-legacy-key".into()])
+        .unwrap();
+    assert_eq!(
+        reopened.get("sync/password").unwrap().as_deref(),
+        Some("test-only-password")
+    );
+    assert!(reopened.get("missing-legacy-key").unwrap().is_none());
+    assert!(
+        transaction(
+            &reopened,
+            &[("sync/password".into(), "replacement".into())],
+            || bail!("Settings write failed")
+        )
+        .is_err()
+    );
+    assert_eq!(
+        reopened.get("sync/password").unwrap().as_deref(),
+        Some("test-only-password")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    std::fs::write(&path, b"{corrupted").unwrap();
+    assert!(reopened.get("api/provider").is_err());
+    assert!(reopened.set("api/provider", Some("replacement")).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"{corrupted");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "Uses the current local credential profile; isolated coverage runs by default"]
 #[cfg(any(windows, target_os = "macos"))]
 fn system_vault_roundtrip() {
     let target = format!("pordo/test/{}", uuid::Uuid::new_v4());

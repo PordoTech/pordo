@@ -1,4 +1,4 @@
-//! Secrets live in the OS vault, never in settings JSON or diagnostics.
+//! Local credentials live in a private JSON file, separate from settings and sync payloads.
 use anyhow::{Context, Result};
 
 pub trait Vault {
@@ -7,6 +7,23 @@ pub trait Vault {
 }
 
 pub struct SystemVault;
+struct LegacyVault;
+mod file;
+pub(crate) use file::FileVault;
+
+impl SystemVault {
+    pub(crate) fn local() -> FileVault {
+        FileVault::new(crate::settings::Settings::queue_path().with_file_name("credentials.json"))
+    }
+}
+impl Vault for SystemVault {
+    fn get(&self, target: &str) -> Result<Option<String>> {
+        Self::local().get(target)
+    }
+    fn set(&self, target: &str, value: Option<&str>) -> Result<()> {
+        Self::local().set(target, value)
+    }
+}
 
 /// Roll back key changes if saving settings fails, so the applied config stays usable.
 pub fn transaction(
@@ -49,7 +66,7 @@ fn rollback(
 }
 
 #[cfg(windows)]
-impl Vault for SystemVault {
+impl LegacyVault {
     fn get(&self, target: &str) -> Result<Option<String>> {
         use windows_sys::Win32::{
             Foundation::{ERROR_NOT_FOUND, GetLastError},
@@ -83,38 +100,6 @@ impl Vault for SystemVault {
             result.map(Some)
         }
     }
-    fn set(&self, target: &str, value: Option<&str>) -> Result<()> {
-        use windows_sys::Win32::{
-            Foundation::{ERROR_NOT_FOUND, GetLastError},
-            Security::Credentials::*,
-        };
-        let mut target: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
-        unsafe {
-            if let Some(value) = value {
-                anyhow::ensure!(
-                    value.len() <= CRED_MAX_CREDENTIAL_BLOB_SIZE as usize,
-                    "密钥过长 / API key too long"
-                );
-                let credential = CREDENTIALW {
-                    Type: CRED_TYPE_GENERIC,
-                    TargetName: target.as_mut_ptr(),
-                    CredentialBlobSize: value.len() as u32,
-                    CredentialBlob: value.as_ptr().cast_mut(),
-                    Persist: CRED_PERSIST_LOCAL_MACHINE,
-                    ..std::mem::zeroed()
-                };
-                if CredWriteW(&credential, 0) == 0 {
-                    anyhow::bail!("无法保存密钥 / Cannot save API key: {}", GetLastError());
-                }
-            } else if CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) == 0 {
-                let error = GetLastError();
-                if error != ERROR_NOT_FOUND {
-                    anyhow::bail!("无法清除密钥 / Cannot clear API key: {error}");
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -130,44 +115,29 @@ mod macos {
         options.set_access_synchronized(Some(false));
         options
     }
-    impl Vault for SystemVault {
-        fn get(&self, target: &str) -> Result<Option<String>> {
+    impl LegacyVault {
+        pub(super) fn get(&self, target: &str) -> Result<Option<String>> {
+            // Migration must never display a Keychain authorization dialog.
+            let _interaction =
+                security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+                    .context("无法检查旧凭据 / Cannot inspect legacy credentials")?;
             match passwords::generic_password(options(target)) {
                 Ok(bytes) => String::from_utf8(bytes)
                     .map(Some)
                     .context("已保存的凭据格式无效 / Invalid saved credential"),
                 Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
-                Err(error) => Err(error).context("无法读取钥匙串 / Cannot read Keychain"),
-            }
-        }
-        fn set(&self, target: &str, value: Option<&str>) -> Result<()> {
-            let result = match value {
-                Some(value) => {
-                    passwords::set_generic_password_options(value.as_bytes(), options(target))
-                }
-                None => passwords::delete_generic_password_options(options(target)),
-            };
-            match result {
-                Ok(()) => Ok(()),
-                Err(error) if value.is_none() && error.code() == ITEM_NOT_FOUND => Ok(()),
-                Err(error) => Err(error).context("无法更新钥匙串 / Cannot update Keychain"),
+                Err(_) => anyhow::bail!(
+                    "旧密钥仍保存在钥匙串，请在设置中选择重新填写密钥 / Legacy keys remain in Keychain; choose Re-enter keys in Settings"
+                ),
             }
         }
     }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-impl Vault for SystemVault {
+impl LegacyVault {
     fn get(&self, _target: &str) -> Result<Option<String>> {
         Ok(None)
-    }
-    fn set(&self, _target: &str, value: Option<&str>) -> Result<()> {
-        if value.is_some() {
-            anyhow::bail!(
-                "此平台暂不支持保存密钥 / Credential storage is not supported on this platform"
-            );
-        }
-        Ok(())
     }
 }
 

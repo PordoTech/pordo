@@ -1,6 +1,44 @@
 use super::*;
 
 impl App {
+    fn preferences_credentials(&mut self, ui: &mut Ui) {
+        let l = self.settings.language;
+        if let Some(error) = &self.preferences_draft.credential_error {
+            ui.colored_label(Color32::LIGHT_RED, l.error(error));
+            if design::control(
+                ui,
+                l.text("重新读取密钥", "Reload saved keys"),
+                Some(icons::refresh),
+                design::Control::Outline,
+                0.0,
+            )
+            .clicked()
+            {
+                self.config_message = match self
+                    .preferences_draft
+                    .load_credentials(&crate::credentials::SystemVault)
+                {
+                    Ok(()) => l.text("已重新读取密钥", "Keys reloaded").into(),
+                    Err(error) => l.error(&error.to_string()),
+                };
+            }
+            if design::control(
+                ui,
+                l.text("重新填写密钥", "Re-enter keys"),
+                None,
+                design::Control::Outline,
+                0.0,
+            )
+            .clicked()
+            {
+                self.config_message = match self.preferences_draft.reenter_credentials() {
+                    Ok(()) => l.text("请补充缺失的密钥和同步密码，已有凭据已保留", "Fill in missing keys and sync passwords; existing credentials were preserved").into(),
+                    Err(error) => l.error(&error.to_string()),
+                };
+            }
+        }
+    }
+
     pub(super) fn preferences(&mut self, _ctx: &egui::Context) {
         if self.settings_open {
             self.workspace.page = workspace::Page::Settings;
@@ -115,6 +153,7 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.spacing_mut().item_spacing.y = 14.0;
+                        self.preferences_credentials(ui);
                         match self.preferences_tab {
                             PrefTab::General => self.preferences_general(ui),
                             PrefTab::Providers => self.preferences_providers(ui),
@@ -209,16 +248,6 @@ impl App {
         match result {
             Ok(()) => {
                 self.settings = self.preferences_draft.clone();
-                if !self.is_music()
-                    && let Some(player) = &self.player
-                {
-                    let position = self
-                        .pending_seek
-                        .map_or_else(|| player.position(), |(_, p)| p);
-                    if let Some(id) = player.set_speed(self.settings.video.speed as f32 / 100.0) {
-                        self.pending_seek = Some((id, position));
-                    }
-                }
                 self.online_music.clear_search();
                 self.comic.reload_images();
                 self.config_message = language.text("已保存", "Saved").into();

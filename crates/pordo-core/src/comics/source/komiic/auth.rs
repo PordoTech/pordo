@@ -1,4 +1,4 @@
-//! Memory-only, account-scoped cookies. Hosts own OS credential persistence.
+//! Account-scoped cookies. Hosts choose whether to persist verified sessions.
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{
@@ -67,6 +67,13 @@ impl CookieStore for PrivateJar {
     }
 }
 
+/// Cookies scoped to the service endpoints used by this client.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCookies {
+    api: String,
+    refresh: String,
+}
+
 pub(super) struct Sessions(RwLock<Arc<Session>>);
 impl Sessions {
     pub fn new(base: &str) -> Result<Self> {
@@ -86,6 +93,44 @@ impl Sessions {
         }
         let next = Arc::new(Session::new(base, settings)?);
         *self.0.write().unwrap_or_else(|e| e.into_inner()) = next;
+        Ok(())
+    }
+    pub fn export(&self, base: &str, settings: &AccountSettings) -> Option<SessionCookies> {
+        let current = self.current();
+        if current.settings.email != settings.email.trim()
+            || current.settings.password != settings.password
+            || current.status().phase != "signed_in"
+        {
+            return None;
+        }
+        current.export(base)
+    }
+    pub async fn restore(
+        &self,
+        base: &str,
+        settings: AccountSettings,
+        cookies: SessionCookies,
+    ) -> Result<()> {
+        let old = self.current();
+        if old.settings.email != settings.email.trim() || old.settings.password != settings.password
+        {
+            anyhow::bail!("Komiic 账号已切换 / Account changed");
+        }
+        if old.status().phase == "signed_in" && old.export(base).as_ref() == Some(&cookies) {
+            return Ok(());
+        }
+        let old_epoch = old.epoch();
+        let next = Arc::new(Session::new(base, old.settings.clone())?);
+        next.import(base, &cookies)?;
+        let value = next.account(base).await?;
+        next.accept_account(base, &value)?;
+        next.manual_login.store(true, Ordering::Release);
+        let mut current = self.0.write().unwrap_or_else(|e| e.into_inner());
+        ensure!(
+            Arc::ptr_eq(&old, &current) && old.epoch() == old_epoch,
+            "Komiic 会话已更新 / Session changed"
+        );
+        *current = next;
         Ok(())
     }
     pub fn check(&self, session: &Arc<Session>) -> Result<()> {
@@ -152,6 +197,47 @@ impl Session {
             blocked_until: AtomicU64::new(0),
             quota_reset_at: AtomicU64::new(0),
         })
+    }
+    fn export(&self, base: &str) -> Option<SessionCookies> {
+        let cookie = |endpoint| {
+            self.jar
+                .cookies(&Url::parse(&format!("{base}{endpoint}")).ok()?)?
+                .to_str()
+                .ok()
+                .map(str::to_owned)
+        };
+        Some(SessionCookies {
+            api: cookie("/api/query")?,
+            refresh: cookie("/auth/refresh").unwrap_or_default(),
+        })
+    }
+    fn import(&self, base: &str, cookies: &SessionCookies) -> Result<()> {
+        for (path, header) in [("/", &cookies.api), ("/auth", &cookies.refresh)] {
+            ensure!(
+                header.len() <= 16 * 1024 && !header.contains(['\r', '\n']),
+                "Invalid Komiic session"
+            );
+            let url = Url::parse(&format!("{base}{path}"))?;
+            for cookie in header
+                .split(';')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if path != "/" && cookies.api.split(';').any(|api| api.trim() == cookie) {
+                    continue;
+                }
+                let secure = if url.scheme() == "https" {
+                    "; Secure"
+                } else {
+                    ""
+                };
+                let value =
+                    HeaderValue::from_str(&format!("{cookie}; Path={path}; HttpOnly{secure}"))
+                        .map_err(|_| anyhow::anyhow!("Invalid Komiic session"))?;
+                self.jar.set_cookies(&mut std::iter::once(&value), &url);
+            }
+        }
+        Ok(())
     }
     pub fn configured(&self) -> bool {
         self.settings.auto_login || self.manual_login.load(Ordering::Acquire)
@@ -286,8 +372,11 @@ impl Session {
         } else {
             account?
         };
+        self.accept_account(base, &value)
+    }
+    fn accept_account(&self, base: &str, value: &Value) -> Result<()> {
         ensure!(
-            has_account(&value),
+            has_account(value),
             AuthFailure::new(
                 "登录未成功，请检查账号 / Account verification failed",
                 true,

@@ -6,7 +6,7 @@ Get the package for your platform from [Releases](https://github.com/PordoTech/p
 
 Windows updates can be checked, downloaded and installed from **Settings → About**. On macOS, use the Releases link. Export generated subtitles before restarting.
 
-Service credentials are saved through Windows Credential Manager or macOS Keychain; Android protects its local credentials with Android KeyStore. Local playback and comic reading do not require an AI account.
+Desktop service credentials are saved in a separate local plaintext `credentials.json` file, without system authorization dialogs; Android protects its local credentials with Android KeyStore. Existing desktop credentials migrate when they can be read without a prompt. If macOS requires authorization, the original Keychain entries remain intact; choose **Re-enter keys** in Settings to enter them into the local file instead. Local playback and comic reading do not require an AI account.
 
 The repository moved to `PordoTech/pordo`. Windows clients through v0.5.1 still validate installer URLs against the previous repository. Install the first newer version manually from Releases once it is available; later clients use the new location.
 
@@ -20,7 +20,7 @@ Click the **Lyrics** icon in the playback bar, then choose **Generate AI lyrics*
 
 Use the queue sidebar to select, remove or reorder entries. Hold an item's title before dragging to reorder. Favorites and recent activity are available from the media pages and Home. **Play all** on music favorites uses the displayed favorites, including online tracks not downloaded on this device.
 
-In **Music → Playlists**, create, rename or delete a playlist. Use a favorite song’s **More → Add to playlist**, or **Add songs** in a playlist to select multiple favorites. Hold a song’s title to reorder it, or use **Move up / Move down**. **Play all** starts the playlist; double-clicking a song starts the full playlist at that song. Removing a song or deleting a playlist keeps favorites and files. Playlist edits do not change an already playing queue. Playlists are stored locally and are not included in cloud sync.
+In **Music → Playlists**, create, rename or delete a playlist. Use a favorite song’s **More → Add to playlist**, or **Add songs** in a playlist to select multiple favorites. Hold a song’s title to reorder it, or use **Move up / Move down**. **Play all** starts the playlist; double-clicking a song starts the full playlist at that song. Removing a song or deleting a playlist keeps favorites and files. Playlist edits do not change an already playing queue. With cloud sync enabled, playlist names, online songs and their order follow you between desktop devices. Offline edits and playlist deletions merge on the next sync. Local-only audio files stay on their original device; downloaded online songs retain their local playback locations. Upgrade both devices, then sync the device with your existing playlists first.
 
 | Shortcut | Action |
 | --- | --- |
@@ -38,7 +38,7 @@ window controls. Use **Back** in settings, or click the current media cover, to 
 without reopening the media. Unsaved settings remain available until saved or discarded.
 
 Video playback offers **1.0×**, **1.25×**, **1.5×**, **2.0×** and **3.0×** in the lower-right
-speed menu. Audio pitch is preserved; the remembered video speed does not change music playback.
+speed menu. Audio pitch is preserved. Speed applies to the current video, including quality changes. Switching videos or reopening playback starts at **1.0×**.
 While a video is playing (including seeking or buffering), Pordo requests that the operating system keep the display awake. Pausing, ending, stopping or closing playback releases that request.
 
 Music, video and comic searches show progress in the search button without adding a loading row below the input. Comic update checks keep the refresh icon's size while it spins.
@@ -106,9 +106,9 @@ Some videos return fewer comments without signing in; a danmaku error does not s
 
 Open **Videos → Search**, using the same Favorites / Search tabs as the music page. Choose the source, then select **All**, **Videos** or **Creators** to the left of the search box. Search by keyword, or paste a BV ID or a full `bilibili.com/video/…` link. Creator results open their uploaded videos in the same page. Video covers show play counts at the lower left and duration at the lower right. Search cards show the UP name and publication time below the title; a creator's upload list omits the repeated UP name. Recent publication times use relative labels, older dates use month/day within the current year and a full date in earlier years. Selecting a video immediately opens the player, where metadata and streams load, preferring 1080P, then 720P or a lower authorized AVC stream when needed. The lower-right controls are Quality, Speed, Subtitles, Danmaku, Volume, Play queue and Fullscreen; local videos hide Quality and Danmaku. The play-queue sidebar lists the current video's parts as cover cards with names and durations, highlights the playing part and switches parts on click. Changing quality preserves playback position and pause state, while a different part starts from its beginning. Recent videos can be reopened from Home and the video library.
 
-The heart on a creator card or uploaded-video page saves that creator to **Videos → Favorites**, separately from playable videos. Favorites survive restarts and participate in configured cloud sync; account cookies and login sessions remain device-local. Search preserves Bilibili's returned order without adding a local popularity or publication-date sort; mixed results show the creator section before videos.
+The heart on a creator card or uploaded-video page saves that creator to **Videos → Favorites**, separately from playable videos. Favorites survive restarts and participate in configured cloud sync. Search preserves Bilibili's returned order without adding a local popularity or publication-date sort; mixed results show the creator section before videos.
 
-In **Settings → Video**, select **Bilibili**, choose **Sign in with QR**, scan with the official Bilibili app and confirm on your phone. The account name appears after confirmation. Sessions are saved in Windows Credential Manager or macOS Keychain, outside ordinary settings and cloud sync. **Sign out** appears while signed in and removes the locally saved session and stops Bilibili playback. Expired sessions require another scan; account-password login is not offered. Login controls are kept in settings; the video search bar uses the same layout as music search.
+In **Settings → Video**, select **Bilibili**, choose **Sign in with QR**, scan with the official Bilibili app and confirm on your phone. The account name appears after confirmation. Desktop sessions are saved in the local credentials file and can sync as encrypted data. **Sign out** removes the saved session and stops Bilibili playback. When credential sync is enabled, sign-out reaches other devices on their next sync. Expired sessions require another scan; account-password login is not offered. Login controls are kept in settings; the video search bar uses the same layout as music search.
 
 The first version supports ordinary uploaded videos with H.264 video and AAC audio. Available qualities depend on your account and the streams Bilibili returns. Bangumi, live streams, paid courses, HDR and AV1/HEVC-only streams are not supported. If Bilibili requests security verification, follow the website prompt or sign in and retry; the app does not treat that response as an empty search. Initial seeks in long fragmented videos can take longer while the media index is read.
 
@@ -128,13 +128,13 @@ Only explicitly requested audio segments are sent to the selected AI service, no
 
 ## Cloud sync and local data
 
-Configure an HTTPS WebDAV service in **Settings → Cloud Sync**, test the connection, then enable sync. Use the same account on another device. Offline changes stay local and are merged after reconnecting.
+Configure an HTTPS WebDAV service in **Settings → Cloud Sync**, test the connection, then enable sync. Use the same account on another device and enter that device’s WebDAV application password to connect. Offline changes stay local and are merged after reconnecting.
 
-Sync runs on startup, manual requests and changes to favorites or settings, without periodic polling. Reading and playback progress is saved locally and submitted when leaving the reader/player or closing the app. Unchanged device files are skipped using their ETags. Desktop shutdown waits up to eight seconds for pending sync; unfinished uploads remain saved for the next startup.
+Sync runs on startup, manual requests and changes to favorites, playlists, saved lyrics, credentials or settings, without periodic polling. Reading and playback progress is saved locally and submitted when leaving the reader/player or closing the app. Unchanged device files are skipped using their ETags. Desktop shutdown waits up to eight seconds for pending sync; unfinished uploads remain saved for the next startup.
 
-Sync covers supported service/model settings, comic and online-music favorites, favorite Bilibili creators, creator update lists and seen markers, reading/listening progress and related preferences. It does not upload local media files or paths, playback queues, downloaded audio, covers, comic pages, translated images or subtitle caches.
+Sync covers supported service/model settings, comic and online-music favorites, desktop playlists of online songs, favorite Bilibili creators, creator update lists and seen markers, reading/listening progress and related preferences. Favorite songs’ local LRC lyrics also sync on desktop, including AI-generated lyrics. Online songs are matched by source and song ID. Local audio is matched by file content. Synced versions are available in the player’s **Lyrics → Synced lyrics** menu. Removing a local file or unfavoriting the song preserves existing synced versions. It does not upload local media files or paths, playback queues, downloaded audio, covers, comic pages, translated images or subtitle caches.
 
-API keys are excluded by default. To sync them, enable the option and use the same separate sync passphrase on all devices; keep the original passphrase available when changing it. WebDAV passwords and the passphrase itself are not uploaded. A wrong passphrase stops writes rather than replacing existing encrypted keys.
+On desktop, **Sync credentials** encrypts and syncs AI and music API keys, Bilibili sessions, and Komiic credentials and sessions. The option defaults to off. Use the same separate sync passphrase on each device. WebDAV passwords and the passphrase itself stay on the device. The app validates received login sessions before using them.
 
 Windows data normally lives in `%LOCALAPPDATA%/pordo`. macOS defaults to `~/.config/pordo`; a configured `XDG_CONFIG_HOME` changes that location. Existing profiles in the corresponding `replayer` directory are reused automatically. Downloads and caches can occupy significant space. Stop a torrent before manually deleting its cache, and retain downloaded-music sidecars when moving files.
 

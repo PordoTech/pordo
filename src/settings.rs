@@ -243,7 +243,30 @@ impl Settings {
     }
     pub fn load_credentials(&mut self, vault: &impl crate::credentials::Vault) -> Result<()> {
         let path = Self::path();
-        self.load_credentials_from(vault, &path)
+        let result = self.load_credentials_from(vault, &path);
+        self.credential_error = result.as_ref().err().map(ToString::to_string);
+        result
+    }
+    pub(crate) fn reenter_credentials(&mut self) -> Result<()> {
+        let path = Self::path();
+        let mut ids = vec![
+            "music/chksz".to_owned(),
+            format!(
+                "comic/komiic/{}/password",
+                self.comics.komiic.credential_id()
+            ),
+            format!("sync/{}/password", self.sync.account()),
+            format!("sync/{}/passphrase", self.sync.account()),
+        ];
+        ids.extend(self.ai.providers.iter().map(|p| format!("ai/{}", p.id)));
+        let targets: Vec<_> = ids
+            .iter()
+            .map(|id| Self::secret_target(&path, id))
+            .collect();
+        // Leave legacy OS credentials intact. Explicit local misses prevent any
+        // future fallback, including after the user deliberately clears a key.
+        crate::credentials::SystemVault::local().finish_migration(&targets)?;
+        self.load_credentials(&crate::credentials::SystemVault)
     }
     fn load_credentials_from(
         &mut self,
@@ -267,7 +290,6 @@ impl Settings {
                 ),
             ))?
             .unwrap_or_default();
-        self.credential_error = None;
         self.sync.password = vault
             .get(&Self::secret_target(
                 path,
@@ -280,6 +302,7 @@ impl Settings {
                 &format!("sync/{}/passphrase", self.sync.account()),
             ))?
             .unwrap_or_default();
+        self.credential_error = None;
         Ok(())
     }
     fn save_with(

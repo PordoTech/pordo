@@ -22,6 +22,113 @@ fn song(id: &str) -> Record {
         ..Default::default()
     }
 }
+
+#[test]
+fn cloud_roundtrip_syncs_names_membership_order_and_deletion_without_local_paths() {
+    use crate::sync::{Journal, model::Snapshot};
+    let directory = directory();
+    let mut home = State::open(directory.join("home.json"));
+    let mut laptop = State::open(directory.join("laptop.json"));
+    let mut downloaded = song("a");
+    downloaded.path = "C:/private/download.flac".into();
+    let local = Record {
+        path: "C:/private/local.flac".into(),
+        title: "Private local file".into(),
+        music: true,
+        ..Default::default()
+    };
+    let id = home
+        .store
+        .named(None, "Home", &[downloaded, local.clone(), song("b")])
+        .unwrap();
+    let mut values = Snapshot::new();
+    home.capture_cloud(&mut values);
+    let text = serde_json::to_string(&values).unwrap();
+    assert!(!text.contains("C:/private"));
+    assert!(!text.contains("Private local file"));
+    let mut a = Journal::load(&directory.join("home-journal.json"), "home").unwrap();
+    a.capture(values, &Snapshot::new());
+    let mut b = Journal::load(&directory.join("laptop-journal.json"), "laptop").unwrap();
+    b.merge(&a.document).unwrap();
+    laptop.apply_cloud(&b.values()).unwrap();
+    assert_eq!(laptop.store.data.playlists[0].tracks.len(), 2);
+    assert_eq!(laptop.store.data.playlists[0].name, "Home");
+    laptop.store.named(Some(&id), "Travel", &[]).unwrap();
+    laptop.store.relocate(&id, 0, 2).unwrap();
+    laptop.store.add(&id, &[song("c")]).unwrap();
+    b.observed = b.values();
+    let mut values = Snapshot::new();
+    laptop.capture_cloud(&mut values);
+    b.capture(values, &Snapshot::new());
+    a.merge(&b.document).unwrap();
+    home.apply_cloud(&a.values()).unwrap();
+    let stale = a.document.clone();
+    let playlist = &home.store.data.playlists[0];
+    assert_eq!(playlist.name, "Travel");
+    assert_eq!(
+        playlist
+            .tracks
+            .iter()
+            .map(|r| r.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Song b", "Private local file", "Song a", "Song c"]
+    );
+    assert_eq!(
+        State::open(directory.join("home.json"))
+            .store
+            .data
+            .playlists[0]
+            .tracks
+            .len(),
+        4
+    );
+    home.store
+        .commit(|data| {
+            data.playlists.clear();
+            data.deleted.insert(id.clone());
+            Ok(())
+        })
+        .unwrap();
+    a.observed = a.values();
+    let mut values = Snapshot::new();
+    home.capture_cloud(&mut values);
+    a.capture(values, &Snapshot::new());
+    b.merge(&a.document).unwrap();
+    laptop.selected = Some(id);
+    laptop.apply_cloud(&b.values()).unwrap();
+    assert!(laptop.selected.is_none());
+    assert!(laptop.store.data.playlists.is_empty());
+    assert!(
+        State::open(directory.join("laptop.json"))
+            .store
+            .data
+            .playlists
+            .is_empty()
+    );
+    // A stale offline device cannot revive a deletion.
+    b.merge(&stale).unwrap();
+    assert_eq!(
+        b.values().values().next(),
+        Some(&serde_json::Value::Bool(false))
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn invalid_cloud_playlist_preserves_existing_store() {
+    let directory = directory();
+    let path = directory.join("playlists.json");
+    let mut state = State::open(path.clone());
+    state.store.named(None, "Original", &[song("a")]).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let values = crate::sync::model::Snapshot::from([(
+        "playlist/not-a-uuid".into(),
+        serde_json::json!({"name":"Bad"}),
+    )]);
+    assert!(state.apply_cloud(&values).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::remove_dir_all(directory).unwrap();
+}
 #[test]
 fn playlists_persist_identity_order_metadata_and_independent_membership() {
     let directory = directory();

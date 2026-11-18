@@ -602,6 +602,32 @@ impl State {
             Err(error) => self.status = error.to_string(),
         }
     }
+    pub(super) fn cloud_account_busy(&self) -> bool {
+        self.auth_job.is_some()
+    }
+    pub(super) fn cloud_komiic_session(
+        &self,
+        account: &domain::source::KomiicAccount,
+    ) -> Option<domain::source::KomiicSessionCookies> {
+        self.source.as_ref()?.komiic().export_session(account)
+    }
+    pub(super) fn restore_cloud_komiic_session(
+        &mut self,
+        account: domain::source::KomiicAccount,
+        cookies: domain::source::KomiicSessionCookies,
+    ) -> anyhow::Result<()> {
+        let Some(source) = &self.source else {
+            return Ok(());
+        };
+        let source = source.komiic().clone();
+        source.configure_account(account.clone())?;
+        self.auth_configured = Some(account.clone());
+        self.auth_job = Some(Job::spawn(move |_| async move {
+            source.restore_session(account, cookies).await?;
+            Ok(source.auth_status())
+        }));
+        Ok(())
+    }
     pub fn poll(&mut self, ctx: &egui::Context, settings: &crate::settings::Settings) {
         if self.auth_configured.as_ref() != Some(&settings.comics.komiic) {
             self.auth_job = None;

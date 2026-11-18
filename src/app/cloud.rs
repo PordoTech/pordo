@@ -1,5 +1,9 @@
 use super::*;
-use crate::sync::{self, model::Snapshot};
+use crate::sync::{
+    self,
+    model::Snapshot,
+    webdav::{BILIBILI_ACCOUNT, KOMIIC_ACCOUNT, KOMIIC_SESSION},
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,6 +14,8 @@ pub(super) struct State {
     job: Option<crate::jobs::Job<sync::webdav::Report>>,
     probe: Option<crate::jobs::Job<()>>,
     requested_secrets: BTreeMap<String, String>,
+    requested_accounts: BTreeMap<String, String>,
+    lyrics: cloud_lyrics::State,
     path: PathBuf,
     capture_after: Instant,
     startup: bool,
@@ -31,6 +37,8 @@ impl Default for State {
             job: None,
             probe: None,
             requested_secrets: BTreeMap::new(),
+            requested_accounts: BTreeMap::new(),
+            lyrics: Default::default(),
             path: PathBuf::new(),
             capture_after: Instant::now(),
             startup: false,
@@ -91,6 +99,18 @@ fn secrets(settings: &Settings) -> BTreeMap<String, String> {
             settings.music.api_key.clone(),
         )))
         .collect()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KomiicCredentials {
+    email: String,
+    password: String,
+    auto_login: bool,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KomiicSession {
+    account: String,
+    cookies: crate::comics::source::KomiicSessionCookies,
 }
 
 impl App {
@@ -172,6 +192,80 @@ impl App {
         }
     }
 
+    fn cloud_accounts(&self) -> BTreeMap<String, String> {
+        let mut data = BTreeMap::new();
+        if !self.settings.sync.enabled || !self.settings.sync.sync_keys {
+            return data;
+        }
+        if let Ok(Some(session)) = self.cloud_video_session() {
+            data.insert(BILIBILI_ACCOUNT.into(), session);
+        }
+        let account = &self.settings.comics.komiic;
+        if !account.email.trim().is_empty() && !account.password.is_empty() {
+            let credentials = KomiicCredentials {
+                email: account.email.trim().into(),
+                password: account.password.clone(),
+                auto_login: account.auto_login,
+            };
+            data.insert(
+                KOMIIC_ACCOUNT.into(),
+                serde_json::to_string(&credentials).unwrap(),
+            );
+            if let Some(cookies) = self.comic.cloud_komiic_session(account) {
+                let session = KomiicSession {
+                    account: account.credential_id(),
+                    cookies,
+                };
+                data.insert(
+                    KOMIIC_SESSION.into(),
+                    serde_json::to_string(&session).unwrap(),
+                );
+            }
+        } else if self.settings.comics.komiic_signed_out {
+            data.insert(KOMIIC_ACCOUNT.into(), String::new());
+            data.insert(KOMIIC_SESSION.into(), String::new());
+        }
+        data
+    }
+
+    fn poll_cloud_lyrics(&mut self, ctx: &egui::Context) {
+        let Some(journal) = &self.cloud.journal else {
+            return;
+        };
+        let active = if self.is_music() {
+            self.source.as_deref()
+        } else {
+            None
+        };
+        let may_have_synced_lyrics = journal
+            .document
+            .entries
+            .range("lyric/file/".to_owned()..)
+            .next()
+            .is_some_and(|(key, _)| key.starts_with("lyric/file/"));
+        self.cloud
+            .lyrics
+            .poll(ctx, &self.library.records, active, may_have_synced_lyrics);
+        if self.is_music()
+            && (active.is_some() || self.online_origin.is_some())
+            && self.lyrics.lines.is_empty()
+            && let Some((_, text)) = self.cloud_lyric_versions().first()
+        {
+            self.lyrics = crate::lyrics::Lyrics::parse(text);
+            self.reset_lyrics_follow();
+        }
+    }
+    pub(super) fn cloud_lyric_versions(&self) -> Vec<(u64, &str)> {
+        let Some(journal) = &self.cloud.journal else {
+            return Vec::new();
+        };
+        self.cloud.lyrics.versions(
+            &journal.document,
+            self.online_origin.as_ref(),
+            self.source.as_deref(),
+        )
+    }
+
     fn cloud_snapshot(&self) -> Snapshot {
         let mut data = settings_snapshot(&self.settings);
         let tracked = |key: &str| {
@@ -200,25 +294,55 @@ impl App {
             }
             let Some(song) = &record.online else { continue };
             let prefix = format!("song/{}", song.key());
-            if !record.favorite && !tracked(&format!("{prefix}/favorite")) {
+            let known = |field: &str| {
+                self.cloud.journal.as_ref().is_some_and(|j| {
+                    j.document
+                        .entries
+                        .get(&format!("{prefix}/{field}"))
+                        .is_some_and(|e| e.value.is_some())
+                })
+            };
+            if !record.favorite && !known("favorite") {
                 continue;
             }
-            data.insert(format!("{prefix}/song"), json!(song));
             data.insert(format!("{prefix}/favorite"), json!(record.favorite));
             data.insert(format!("{prefix}/favorited_at"), json!(record.favorited_at));
-            data.insert(format!("{prefix}/progress"), json!({"position":record.position,"duration":record.duration,"played":record.played}));
+            if record.favorite || known("song") {
+                data.insert(format!("{prefix}/song"), json!(song));
+                data.insert(format!("{prefix}/progress"), json!({"position":record.position,"duration":record.duration,"played":record.played}));
+            }
         }
         self.video_updates_snapshot(&mut data);
+        self.playlists.capture_cloud(&mut data);
+        self.cloud.lyrics.capture(
+            &self.settings.sync.device_id,
+            &self.library.records,
+            &mut data,
+        );
+        if let Some(journal) = &self.cloud.journal {
+            // A missing local library/file is not an explicit unfavorite or
+            // playlist deletion. Those actions have false registers of their own.
+            for (key, value) in journal.values() {
+                if key.starts_with("song/")
+                    || key.starts_with("playlist/")
+                    || key.starts_with("lyric/")
+                {
+                    data.entry(key).or_insert(value);
+                }
+            }
+        }
         data
     }
 
     fn capture_cloud(&mut self, progress: bool) -> anyhow::Result<bool> {
+        self.playlists.cloud_ready()?;
         if progress {
             self.update_library();
             self.library.flush();
             self.comic.flush();
         }
         let mut snapshot = self.cloud_snapshot();
+        let accounts = self.cloud_accounts();
         let Some(journal) = &mut self.cloud.journal else {
             return Ok(false);
         };
@@ -227,10 +351,16 @@ impl App {
         }
         let changed = journal.capture(snapshot, &settings_snapshot(&Settings::default()));
         let keys_changed = self.settings.sync.sync_keys
-            && secrets(&self.settings).iter().any(|(id, key)| {
-                (!key.is_empty() || journal.secret_hashes.contains_key(id))
-                    && journal.secret_hashes.get(id) != Some(&crate::comics::digest(key.as_bytes()))
-            });
+            && secrets(&self.settings)
+                .iter()
+                .chain(&accounts)
+                .any(|(id, key)| {
+                    (id.starts_with("account/")
+                        || !key.is_empty()
+                        || journal.secret_hashes.contains_key(id))
+                        && journal.secret_hashes.get(id)
+                            != Some(&crate::comics::digest(key.as_bytes()))
+                });
         if changed {
             journal.save(&self.cloud.path)?;
         }
@@ -304,6 +434,7 @@ impl App {
         if !self.settings.sync.enabled || self.cloud.journal.is_none() {
             return;
         }
+        self.poll_cloud_lyrics(ctx);
         let session = self.cloud_session();
         let leaving = self.cloud.session.is_some() && self.cloud.session != session;
         self.cloud.session = session;
@@ -378,13 +509,15 @@ impl App {
         let settings = self.settings.sync.clone();
         let journal = self.cloud.journal.clone().unwrap();
         let keys = secrets(&self.settings);
+        let accounts = self.cloud_accounts();
+        self.cloud.requested_accounts = accounts.clone();
         self.cloud.requested_secrets = keys.clone();
         self.cloud.changed = None;
         self.cloud.status = self.settings.language.text("正在同步…", "Syncing…").into();
         let ctx = ctx.clone();
         self.cloud.job = Some(crate::jobs::Job::spawn(move |_| async move {
             let result = sync::bounded(
-                sync::webdav::run(settings, journal, keys),
+                sync::webdav::run_desktop(settings, journal, keys, accounts),
                 Duration::from_secs(120),
             )
             .await;
@@ -400,13 +533,88 @@ impl App {
         self.capture_cloud(false)?;
         let mut journal = self.cloud.journal.clone().unwrap();
         journal.merge(&report.journal.document)?;
+        if !journal.music_repaired {
+            // Earlier clients could delete whole song groups when a local
+            // library was missing. Recover known favorites once on upgrade;
+            // explicit unfavorites (false) remain authoritative.
+            for record in
+                self.library.records.iter().filter(|r| {
+                    r.music && r.favorite && crate::bilibili::video_id(&r.path).is_none()
+                })
+            {
+                let Some(song) = &record.online else { continue };
+                let prefix = format!("song/{}", song.key());
+                if ["song", "favorite"].iter().all(|field| {
+                    journal
+                        .document
+                        .entries
+                        .get(&format!("{prefix}/{field}"))
+                        .is_some_and(|e| e.value.is_none())
+                }) {
+                    journal.write(format!("{prefix}/song"), Some(json!(song)));
+                    let key = format!("{prefix}/favorite");
+                    journal.write(key.clone(), Some(json!(true)));
+                    journal.document.entries.get_mut(&key).unwrap().favorited_at =
+                        Some(record.favorited_at);
+                }
+            }
+            journal.music_repaired = true;
+        }
         let old_settings = self.settings.clone();
         let old_draft = self.preferences_draft.clone();
         let current_keys = secrets(&old_settings);
+        let accounts = self.cloud_accounts();
+        let mut bilibili_session = None;
+        let mut komiic_session = None;
         let values = journal.values();
         let mut next = old_settings.clone();
         apply_settings(&mut next, &values)?;
         for (id, key) in report.secrets {
+            if id.starts_with("account/") {
+                if !self.settings.sync.sync_keys
+                    || accounts.get(&id) != self.cloud.requested_accounts.get(&id)
+                {
+                    continue;
+                }
+                match id.as_str() {
+                    BILIBILI_ACCOUNT
+                        if accounts.get(&id) != Some(&key) && !self.cloud_video_account_busy() =>
+                    {
+                        bilibili_session = Some(key);
+                    }
+                    KOMIIC_ACCOUNT if accounts.get(&id) != Some(&key) => {
+                        if key.is_empty() {
+                            next.comics.komiic.password.clear();
+                            next.comics.komiic.auto_login = false;
+                            next.comics.komiic_signed_out = true;
+                        } else {
+                            let value: KomiicCredentials =
+                                serde_json::from_str(&key).map_err(|_| {
+                                    anyhow::anyhow!("Invalid synced Komiic credentials")
+                                })?;
+                            anyhow::ensure!(
+                                value.email.contains('@') && !value.password.is_empty(),
+                                "Invalid synced Komiic account"
+                            );
+                            next.comics.komiic = crate::comics::source::KomiicAccount {
+                                email: value.email,
+                                password: value.password,
+                                auto_login: value.auto_login,
+                            };
+                            next.comics.komiic.validate()?;
+                            next.comics.komiic_signed_out = false;
+                        }
+                    }
+                    KOMIIC_SESSION if !key.is_empty() && accounts.get(&id) != Some(&key) => {
+                        komiic_session = Some(
+                            serde_json::from_str::<KomiicSession>(&key)
+                                .map_err(|_| anyhow::anyhow!("Invalid synced Komiic session"))?,
+                        );
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             if current_keys.get(&id) != self.cloud.requested_secrets.get(&id) {
                 continue;
             }
@@ -424,6 +632,19 @@ impl App {
             next.save()?;
         }
         self.settings = next;
+        if let Some(bilibili) = bilibili_session {
+            self.apply_cloud_video_session(&bilibili)?;
+        }
+        if let Some(session) = komiic_session
+            && !self.comic.cloud_account_busy()
+            && !self.settings.comics.komiic.password.is_empty()
+            && session.account == self.settings.comics.komiic.credential_id()
+        {
+            self.comic.restore_cloud_komiic_session(
+                self.settings.comics.komiic.clone(),
+                session.cookies,
+            )?;
+        }
         if old_draft == old_settings {
             self.preferences_draft = self.settings.clone();
         } else {
@@ -456,12 +677,19 @@ impl App {
                     p.api_key = pulled.api_key.clone();
                 }
             }
+            if self.preferences_draft.comics.komiic == old_settings.comics.komiic {
+                self.preferences_draft.comics.komiic = self.settings.comics.komiic.clone();
+            }
+            self.preferences_draft.comics.komiic_signed_out =
+                self.settings.comics.komiic_signed_out;
             if self.preferences_draft.music.api_key == old_settings.music.api_key {
                 self.preferences_draft.music.api_key = self.settings.music.api_key.clone();
             }
         }
         let mut applied = values.clone();
         sync::portable::preserve_local_progress(&mut applied, &local, &baseline);
+        self.playlists.apply_cloud(&applied)?;
+        self.apply_cloud_song_deletions(&journal.document)?;
         self.apply_cloud_library(&applied)?;
         self.cloud.video_ready = true;
         journal.uploaded = report.journal.uploaded;
@@ -474,7 +702,10 @@ impl App {
         // Persist normalization (e.g. a read chapter clears its unread flag),
         // otherwise stale remote fields could return on a later synchronization.
         for (key, value) in &values {
-            if key.starts_with("secret/") || sync::portable::progress_key(key) {
+            if key.starts_with("secret/")
+                || key.starts_with("account/")
+                || sync::portable::progress_key(key)
+            {
                 continue;
             }
             if observed.get(key) != Some(value) {
@@ -604,6 +835,30 @@ impl App {
         Ok(())
     }
 
+    fn apply_cloud_song_deletions(&mut self, document: &sync::Document) -> anyhow::Result<()> {
+        let mut changed = false;
+        for record in &mut self.library.records {
+            if !record.music || crate::bilibili::video_id(&record.path).is_some() {
+                continue;
+            }
+            let Some(song) = &record.online else { continue };
+            if let Some(entry) = document
+                .entries
+                .get(&format!("song/{}/favorite", song.key()))
+                && (entry.value.is_none() || entry.value == Some(json!(false)))
+                && record.favorite
+            {
+                record.favorite = false;
+                record.favorited_at = entry.favorited_at.unwrap_or(0);
+                changed = true;
+            }
+        }
+        if changed {
+            self.library.save_records()?;
+        }
+        Ok(())
+    }
+
     pub(super) fn preferences_cloud(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
         let settings = &mut self.preferences_draft.sync;
@@ -656,12 +911,16 @@ impl App {
         preferences::form_row(ui, l.text("设备名称", "Device name"), l, |ui| {
             design::input_field(ui, &mut settings.device_name, ui.available_width(), "");
         });
-        preferences::form_row(ui, l.text("同步 API Key", "Sync API keys"), l, |ui| {
+        preferences::form_row(ui, l.text("同步密钥", "Sync credentials"), l, |ui| {
             design::toggle(
                 ui,
                 &mut settings.sync_keys,
-                l.text("同步 API Key", "Sync API keys"),
-            );
+                l.text("同步密钥", "Sync credentials"),
+            )
+            .on_hover_text(l.text(
+                "加密同步 API Key、B 站登录会话及 Komiic 账号和会话。",
+                "Encrypt and sync API keys, Bilibili sign-in, and the Komiic account and session.",
+            ));
         });
         if settings.sync_keys {
             preferences::form_row(ui, l.text("同步口令", "Sync passphrase"), l, |ui| {
@@ -847,6 +1106,7 @@ mod tests {
     fn app(ctx: &egui::Context, directory: &std::path::Path) -> App {
         let mut app = comic::visual_tests::settings_fixture(ctx);
         app.library = library::Library::open(directory.join("library.json"));
+        app.playlists = playlists::State::open(directory.join("playlists.json"));
         app
     }
     fn directory() -> PathBuf {
@@ -1096,6 +1356,133 @@ mod tests {
         let journal = app.cloud.journal.as_mut().unwrap();
         journal.uploaded = journal.digest();
         app
+    }
+
+    #[test]
+    fn missing_music_library_does_not_publish_implicit_deletions() {
+        let ctx = egui::Context::default();
+        let directory = directory();
+        let mut app = configured(&ctx, &directory);
+        let before = app.cloud.journal.as_ref().unwrap().document.entries.clone();
+        app.library.records.clear();
+        app.capture_cloud(true).unwrap();
+        assert!(app.cloud.journal.as_ref().unwrap().document.entries == before);
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn playlist_pipeline_preserves_inflight_edits_and_restores_a_missing_local_file() {
+        let ctx = egui::Context::default();
+        let directory = directory();
+        let mut app = configured(&ctx, &directory);
+        let id = uuid::Uuid::new_v4().to_string();
+        let key = format!("playlist/{id}");
+        let mut playlist =
+            json!({"id":id,"name":"Home","created":1,"modified":1,"tracks":[song()]});
+        app.playlists
+            .apply_cloud(&Snapshot::from([(key.clone(), playlist.clone())]))
+            .unwrap();
+        app.capture_cloud(false).unwrap();
+        let mut remote = app.cloud.journal.clone().unwrap();
+        remote.document.device = "other".into();
+        playlist["name"] = json!("Remote");
+        remote.write(key.clone(), Some(playlist.clone()));
+        remote.document.entries.get_mut(&key).unwrap().time = 1;
+        playlist["name"] = json!("Local edit while syncing");
+        app.playlists
+            .apply_cloud(&Snapshot::from([(key.clone(), playlist)]))
+            .unwrap();
+        app.finish_cloud(sync::webdav::Report {
+            journal: remote,
+            secrets: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            app.cloud_snapshot()[&key]["name"],
+            json!("Local edit while syncing")
+        );
+        assert!(app.cloud.changed.is_some());
+        // A deleted/missing cache file must be pulled again, never uploaded as a deletion.
+        std::fs::remove_file(directory.join("playlists.json")).unwrap();
+        app.playlists = playlists::State::open(directory.join("playlists.json"));
+        app.capture_cloud(false).unwrap();
+        let remote = app.cloud.journal.clone().unwrap();
+        app.finish_cloud(sync::webdav::Report {
+            journal: remote,
+            secrets: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            app.cloud_snapshot()[&key]["name"],
+            json!("Local edit while syncing")
+        );
+        assert!(directory.join("playlists.json").exists());
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upgrade_recovers_known_favorites_from_legacy_deletions_once_and_honors_later_removals() {
+        let ctx = egui::Context::default();
+        let directory = directory();
+        let mut app = configured(&ctx, &directory);
+        let prefix = format!("song/{}", song().key());
+        let mut remote = app.cloud.journal.clone().unwrap();
+        remote.document.device = "other".into();
+        remote.write(format!("{prefix}/song"), None);
+        remote.write(format!("{prefix}/favorite"), None);
+        app.finish_cloud(sync::webdav::Report {
+            journal: remote,
+            secrets: BTreeMap::new(),
+        })
+        .unwrap();
+        assert!(app.library.records[0].favorite);
+        assert_eq!(
+            app.cloud.journal.as_ref().unwrap().values()[&format!("{prefix}/favorite")],
+            json!(true)
+        );
+        assert!(app.cloud.journal.as_ref().unwrap().music_repaired);
+        let mut remote = app.cloud.journal.clone().unwrap();
+        remote.document.device = "other".into();
+        remote.write(format!("{prefix}/song"), None);
+        remote.write(format!("{prefix}/favorite"), None);
+        app.finish_cloud(sync::webdav::Report {
+            journal: remote,
+            secrets: BTreeMap::new(),
+        })
+        .unwrap();
+        assert!(!app.library.records[0].favorite);
+        assert_eq!(app.library.records[0].path, "test.flac");
+        app.library
+            .toggle_favorite("test.flac", "Online song", true);
+        app.capture_cloud(false).unwrap();
+        let values = app.cloud.journal.as_ref().unwrap().values();
+        assert_eq!(values[&format!("{prefix}/favorite")], json!(true));
+        assert!(values.contains_key(&format!("{prefix}/song")));
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upgrade_does_not_restore_an_explicit_unfavorite_without_song_metadata() {
+        let ctx = egui::Context::default();
+        let directory = directory();
+        let mut app = configured(&ctx, &directory);
+        let prefix = format!("song/{}", song().key());
+        let mut remote = app.cloud.journal.clone().unwrap();
+        remote.document.device = "other".into();
+        remote.write(format!("{prefix}/song"), None);
+        remote.write(format!("{prefix}/favorite"), Some(json!(false)));
+        app.finish_cloud(sync::webdav::Report {
+            journal: remote,
+            secrets: BTreeMap::new(),
+        })
+        .unwrap();
+        assert!(!app.library.records[0].favorite);
+        assert_eq!(app.library.records[0].path, "test.flac");
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

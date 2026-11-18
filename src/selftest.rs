@@ -164,7 +164,9 @@ pub fn profile_bilibili(id: String) -> Result<()> {
         credentials::{SystemVault, Vault},
     };
     let (source, quality) = crate::jobs::block_on(async move {
-        let saved = SystemVault.get(&crate::settings::Settings::bilibili_target())?;
+        let saved = SystemVault
+            .get(&crate::settings::Settings::bilibili_target())?
+            .filter(|value| !value.is_empty());
         let session = saved
             .as_deref()
             .map(serde_json::from_str::<crate::bilibili::Session>)

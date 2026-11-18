@@ -6,7 +6,6 @@ pub mod bilibili;
 pub struct Settings {
     pub source: String,
     pub check_updates: bool,
-    pub speed: u16,
     pub danmaku: DanmakuSettings,
     pub skip: SkipSettings,
 }
@@ -15,7 +14,6 @@ impl Default for Settings {
         Self {
             source: "bilibili".into(),
             check_updates: true,
-            speed: 100,
             danmaku: Default::default(),
             skip: Default::default(),
         }

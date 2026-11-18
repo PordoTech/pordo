@@ -71,6 +71,32 @@ impl App {
                         });
                     });
                 }
+                if !generating {
+                    let mut selected = None;
+                    let versions = self.cloud_lyric_versions();
+                    if !versions.is_empty() {
+                        ui.menu_button(language.text("云端歌词", "Synced lyrics"), |ui| {
+                            for (time, text) in versions {
+                                let date = i64::try_from(time).ok()
+                                    .and_then(chrono::DateTime::from_timestamp_millis)
+                                    .map(|d| d.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S").to_string());
+                                let excerpt: String = crate::lyrics::Lyrics::parse(text).lines[0].text.chars().take(24).collect();
+                                let label = date.map_or_else(|| excerpt.clone(), |d| format!("{d} · {excerpt}"));
+                                if design::menu_item(ui, false, &label).clicked() {
+                                    selected = Some(crate::lyrics::Lyrics::parse(text));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if let Some(lyrics) = selected {
+                        self.lyrics = lyrics;
+                        self.reset_lyrics_follow();
+                        self.workspace.listening_tab = 0;
+                        self.workspace.page = workspace::Page::Listening;
+                        ui.close();
+                    }
+                }
                 if generating {
                     if ui.button(language.text("取消生成", "Cancel generation")).clicked() {
                         *act = Act::CancelLyrics;

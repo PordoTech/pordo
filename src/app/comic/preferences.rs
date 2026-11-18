@@ -162,6 +162,7 @@ impl App {
         if login || logout {
             let mut next = self.settings.clone();
             next.comics.komiic = self.preferences_draft.comics.komiic.clone();
+            next.comics.komiic_signed_out = logout;
             if logout {
                 next.comics.komiic.auto_login = false;
                 next.comics.komiic.password.clear();
@@ -230,8 +231,8 @@ impl App {
             }
         }
         ui.label(l.text(
-            "密码仅存本机凭据库，不参与云同步。",
-            "Password stays in the local credential vault and is not cloud-synced.",
+            "开启「同步密钥」后，账号和登录状态会加密同步。",
+            "Sync credentials encrypts and syncs the account and sign-in state.",
         ));
         ui.separator();
     }

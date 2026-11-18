@@ -17,6 +17,7 @@ use crate::subtitles::{self, Cue, Job};
 mod about;
 mod branding;
 mod cloud;
+mod cloud_lyrics;
 mod comic;
 mod danmaku;
 mod design;
@@ -602,16 +603,14 @@ impl eframe::App for App {
                         {
                             self.pending_seek = Some((player.seek(position), position));
                         }
-                        if !self.is_music()
+                        if let Some(speed) = self.online_video.resume_speed.take()
                             && let Some(player) = &self.player
+                            && let Some(id) = player.set_speed(speed)
                         {
-                            let speed = self.settings.video.speed as f32 / 100.0;
-                            if let Some(id) = player.set_speed(speed) {
-                                let position = self
-                                    .pending_seek
-                                    .map_or_else(|| player.position(), |(_, p)| p);
-                                self.pending_seek = Some((id, position));
-                            }
+                            let position = self
+                                .pending_seek
+                                .map_or_else(|| player.position(), |(_, p)| p);
+                            self.pending_seek = Some((id, position));
                         }
                     }
                     Event::Ended => {

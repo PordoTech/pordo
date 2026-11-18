@@ -3,7 +3,7 @@ use super::*;
 use anyhow::{Result, bail, ensure};
 use library::Record;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Playlist {
@@ -13,16 +13,28 @@ struct Playlist {
     modified: u64,
     tracks: Vec<Record>,
 }
+// Only source identities and portable song metadata enter cloud documents.
+#[derive(Serialize, Deserialize)]
+struct CloudPlaylist {
+    id: String,
+    name: String,
+    created: u64,
+    modified: u64,
+    tracks: Vec<crate::music_sources::OnlineSong>,
+}
 #[derive(Clone, Serialize, Deserialize)]
 struct Data {
     version: u32,
     playlists: Vec<Playlist>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    deleted: BTreeSet<String>,
 }
 impl Default for Data {
     fn default() -> Self {
         Self {
             version: 1,
             playlists: vec![],
+            deleted: BTreeSet::new(),
         }
     }
 }
@@ -199,13 +211,134 @@ pub(super) struct State {
     pub drag: queue_drag::QueueDrag,
 }
 impl State {
+    pub(super) fn cloud_ready(&self) -> Result<()> {
+        if let Some(error) = &self.store.load_error {
+            bail!("{error}");
+        }
+        Ok(())
+    }
+    pub(super) fn capture_cloud(&self, values: &mut crate::sync::model::Snapshot) {
+        for playlist in &self.store.data.playlists {
+            let portable = CloudPlaylist {
+                id: playlist.id.clone(),
+                name: playlist.name.clone(),
+                created: playlist.created,
+                modified: playlist.modified,
+                tracks: playlist
+                    .tracks
+                    .iter()
+                    .filter_map(|r| r.online.clone())
+                    .collect(),
+            };
+            values.insert(
+                format!("playlist/{}", playlist.id),
+                serde_json::to_value(portable).unwrap(),
+            );
+        }
+        for id in &self.store.data.deleted {
+            values.insert(format!("playlist/{id}"), serde_json::Value::Bool(false));
+        }
+    }
+    pub(super) fn apply_cloud(&mut self, values: &crate::sync::model::Snapshot) -> Result<()> {
+        self.cloud_ready()?;
+        let mut incoming = Vec::new();
+        for (key, value) in values.iter().filter(|(k, _)| k.starts_with("playlist/")) {
+            let id = key.trim_start_matches("playlist/");
+            ensure!(
+                uuid::Uuid::parse_str(id).is_ok(),
+                "Invalid synced playlist identity"
+            );
+            let playlist = if value == &serde_json::Value::Bool(false) {
+                None
+            } else {
+                let playlist: CloudPlaylist = serde_json::from_value(value.clone())?;
+                ensure!(
+                    playlist.id == id
+                        && !playlist.name.trim().is_empty()
+                        && playlist.name.chars().count() <= 40
+                        && playlist.tracks.len() <= 50_000,
+                    "Invalid synced playlist"
+                );
+                let mut identities = HashSet::new();
+                ensure!(
+                    playlist.tracks.iter().all(|s| !s.id.is_empty()
+                        && !s.source.is_empty()
+                        && identities.insert(s.key())),
+                    "Invalid synced playlist songs"
+                );
+                Some(playlist)
+            };
+            incoming.push((id.to_owned(), playlist));
+        }
+        if incoming.is_empty() {
+            return Ok(());
+        }
+        self.store.commit(|data| {
+            for (id, playlist) in incoming {
+                let old = data.playlists.iter().position(|p| p.id == id);
+                if let Some(playlist) = playlist {
+                    let mut tracks: Vec<_> = playlist
+                        .tracks
+                        .into_iter()
+                        .map(|song| Record {
+                            path: format!("online://{}", song.key()),
+                            title: song.title.clone(),
+                            artist: song.artist.clone(),
+                            album: song.album.clone(),
+                            music: true,
+                            online: Some(song),
+                            ..Default::default()
+                        })
+                        .collect();
+                    // Local files never leave this device; keep them at their saved positions.
+                    if let Some(index) = old {
+                        for (position, track) in data.playlists[index]
+                            .tracks
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, r)| r.online.is_none())
+                        {
+                            tracks.insert(position.min(tracks.len()), track.clone());
+                        }
+                    }
+                    let playlist = Playlist {
+                        id: id.clone(),
+                        name: playlist.name,
+                        created: playlist.created,
+                        modified: playlist.modified,
+                        tracks,
+                    };
+                    if let Some(index) = old {
+                        data.playlists[index] = playlist;
+                    } else {
+                        data.playlists.push(playlist);
+                    }
+                    data.deleted.remove(&id);
+                } else {
+                    data.playlists.retain(|p| p.id != id);
+                    data.deleted.insert(id);
+                }
+            }
+            data.playlists
+                .sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.id.cmp(&b.id)));
+            Ok(())
+        })?;
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|id| !self.store.data.playlists.iter().any(|p| &p.id == id))
+        {
+            self.selected = None;
+        }
+        Ok(())
+    }
     pub fn dialog_open(&self) -> bool {
         self.dialog.is_some()
     }
     pub fn load() -> Self {
         Self::open(Settings::queue_path().with_file_name("music-playlists.json"))
     }
-    fn open(path: PathBuf) -> Self {
+    pub(super) fn open(path: PathBuf) -> Self {
         Self {
             store: Store::open(path),
             selected: None,
@@ -1361,6 +1494,7 @@ impl App {
                             {
                                 let result = self.playlists.store.commit(|data| {
                                     data.playlists.retain(|p| p.id != *id);
+                                    data.deleted.insert(id.clone());
                                     Ok(())
                                 });
                                 match result {

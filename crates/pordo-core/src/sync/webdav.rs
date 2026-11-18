@@ -3,6 +3,21 @@ use futures_util::StreamExt;
 use reqwest::{Client, Method, StatusCode, Url};
 use std::{collections::BTreeMap, time::Duration};
 const MAX_BODY: usize = 8 * 1024 * 1024;
+const DESKTOP: &str = "desktop";
+pub const BILIBILI_ACCOUNT: &str = "account/bilibili";
+pub const KOMIIC_ACCOUNT: &str = "account/komiic";
+pub const KOMIIC_SESSION: &str = "account/komiic-session";
+const ACCOUNT_KEYS: [&str; 3] = [BILIBILI_ACCOUNT, KOMIIC_ACCOUNT, KOMIIC_SESSION];
+
+fn collection_for(key: &str) -> &'static str {
+    if key.starts_with("playlist/") {
+        "playlists"
+    } else if key.starts_with("lyric/") || key.starts_with("account/") {
+        DESKTOP
+    } else {
+        "devices"
+    }
+}
 
 pub struct WebDav {
     http: Client,
@@ -84,16 +99,25 @@ impl WebDav {
     }
     pub async fn prepare(&self) -> Result<()> {
         // Keep the v1 wire namespace shared with existing devices.
-        for path in ["replayer/", "replayer/v1/", "replayer/v1/devices/"] {
-            let response = self
-                .request(Method::from_bytes(b"MKCOL")?, path, None, &[])
-                .await?;
-            ensure!(
-                matches!(response.status().as_u16(), 201 | 405),
-                "WebDAV 创建同步目录失败 / Cannot create sync directory: HTTP {}",
-                response.status().as_u16()
-            );
+        for path in [
+            "replayer/",
+            "replayer/v1/",
+            "replayer/v1/devices/",
+            "replayer/v1/playlists/",
+        ] {
+            self.create_collection(path).await?;
         }
+        Ok(())
+    }
+    async fn create_collection(&self, path: &str) -> Result<()> {
+        let response = self
+            .request(Method::from_bytes(b"MKCOL")?, path, None, &[])
+            .await?;
+        ensure!(
+            matches!(response.status().as_u16(), 201 | 405),
+            "WebDAV 创建同步目录失败 / Cannot create sync directory: HTTP {}",
+            response.status().as_u16()
+        );
         Ok(())
     }
     async fn bytes(response: reqwest::Response) -> Result<Vec<u8>> {
@@ -120,7 +144,11 @@ impl WebDav {
         Ok(self.list_devices().await?.into_keys().collect())
     }
     async fn list_devices(&self) -> Result<BTreeMap<String, Option<String>>> {
-        let response = self.request(Method::from_bytes(b"PROPFIND")?, "replayer/v1/devices/",
+        self.list_collection("devices").await
+    }
+    async fn list_collection(&self, collection: &str) -> Result<BTreeMap<String, Option<String>>> {
+        let directory_path = format!("replayer/v1/{collection}/");
+        let response = self.request(Method::from_bytes(b"PROPFIND")?, &directory_path,
             Some(b"<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:getetag/></d:prop></d:propfind>".to_vec()),
             &[("Depth", "1"), ("Content-Type", "application/xml; charset=utf-8")]).await?;
         ensure!(
@@ -129,8 +157,20 @@ impl WebDav {
             response.status().as_u16()
         );
         let xml = String::from_utf8(Self::bytes(response).await?)?;
-        let directory = self.root.join("replayer/v1/devices/")?;
-        device_listing(&xml, &directory)
+        let directory = self.root.join(&directory_path)?;
+        let mut paths = device_listing(&xml, &directory)?;
+        if collection != "devices" {
+            paths = paths
+                .into_iter()
+                .map(|(path, etag)| {
+                    (
+                        path.replacen("replayer/v1/devices/", &directory_path, 1),
+                        etag,
+                    )
+                })
+                .collect();
+        }
+        Ok(paths)
     }
     async fn get(&self, path: &str) -> Result<Option<(Vec<u8>, Option<String>)>> {
         let response = self.request(Method::GET, path, None, &[]).await?;
@@ -274,15 +314,38 @@ pub struct Report {
 }
 pub async fn run(
     settings: Settings,
+    journal: Journal,
+    secrets: BTreeMap<String, String>,
+) -> Result<Report> {
+    exchange(settings, journal, secrets, None).await
+}
+
+pub async fn run_desktop(
+    settings: Settings,
+    journal: Journal,
+    secrets: BTreeMap<String, String>,
+    accounts: BTreeMap<String, String>,
+) -> Result<Report> {
+    exchange(settings, journal, secrets, Some(accounts)).await
+}
+
+async fn exchange(
+    settings: Settings,
     mut journal: Journal,
     secrets: BTreeMap<String, String>,
+    accounts: Option<BTreeMap<String, String>>,
 ) -> Result<Report> {
     let http = WebDav::new(&settings)?;
     http.prepare().await?;
+    let desktop = accounts.is_some();
+    if desktop {
+        http.create_collection("replayer/v1/desktop/").await?;
+    }
     if settings.sync_keys {
         let keys: std::collections::BTreeSet<_> = secrets
             .keys()
             .chain(journal.secret_hashes.keys())
+            .filter(|id| !id.starts_with("account/"))
             .cloned()
             .collect();
         for id in keys {
@@ -304,33 +367,83 @@ pub async fn run(
             journal.secret_hashes.insert(id, hash);
         }
     }
-    let own = format!("replayer/v1/devices/{}.json", settings.device_id);
-    let mut own_etag = None;
-    let mut own_exists = false;
-    let mut paths = http.list_devices().await?;
+    let mut account_edits = Journal::default();
+    account_edits.document.version = 1;
+    account_edits.document.device = journal.document.device.clone();
+    if settings.sync_keys
+        && let Some(accounts) = accounts
+    {
+        for (id, plain) in accounts {
+            ensure!(
+                ACCOUNT_KEYS.contains(&id.as_str()),
+                "Unknown synced account"
+            );
+            let hash = crate::comics::digest(plain.as_bytes());
+            if journal.secret_hashes.get(&id) == Some(&hash) {
+                continue;
+            }
+            let value = if plain.is_empty() {
+                None
+            } else {
+                let phrase = settings.passphrase.clone();
+                let identity = id.clone();
+                let sealed = tokio::task::spawn_blocking(move || {
+                    crypto::seal(&phrase, &identity, plain.as_bytes())
+                })
+                .await??;
+                Some(serde_json::to_value(sealed)?)
+            };
+            if let Some(entry) = journal.document.entries.get(&id) {
+                account_edits
+                    .document
+                    .entries
+                    .insert(id.clone(), entry.clone());
+            }
+            account_edits.write(id, value);
+        }
+    }
+    // Legacy clients can synthesize deletions for fields they don't understand.
+    let collections = if desktop {
+        &["devices", "playlists", DESKTOP][..]
+    } else {
+        &["devices", "playlists"][..]
+    };
+    let mut own_state = BTreeMap::new();
+    let mut paths = BTreeMap::new();
+    let mut own = BTreeMap::new();
+    for &collection in collections {
+        paths.extend(http.list_collection(collection).await?);
+        let path = format!("replayer/v1/{collection}/{}.json", settings.device_id);
+        paths.entry(path.clone()).or_default();
+        own.insert(path, collection);
+    }
     journal
         .remote_etags
         .retain(|path, _| paths.contains_key(path));
-    paths.entry(own.clone()).or_default();
     for (path, listed_etag) in paths {
         if let Some(etag) = &listed_etag
             && journal.remote_etags.get(&path) == Some(etag)
         {
             // The journal already contains this document's merged operations.
-            if path == own {
-                own_exists = true;
-                own_etag = listed_etag;
+            if own.contains_key(&path) {
+                own_state.insert(path.clone(), listed_etag);
             }
             continue;
         }
         journal.remote_etags.remove(&path);
         if let Some((bytes, etag)) = http.get(&path).await? {
-            if path == own {
-                own_exists = true;
-                own_etag = etag.clone();
+            if own.contains_key(&path) {
+                own_state.insert(path.clone(), etag.clone());
             }
             let remote: Document = serde_json::from_slice(&bytes)
                 .map_err(|_| anyhow::anyhow!("云端同步数据无效 / Invalid cloud sync data"))?;
+            ensure!(
+                remote
+                    .entries
+                    .keys()
+                    .all(|key| path.split('/').nth(2) == Some(collection_for(key))),
+                "Invalid sync collection fields"
+            );
             journal.merge(&remote)?;
             if let Some(etag) = etag {
                 journal.remote_etags.insert(path, etag);
@@ -357,30 +470,74 @@ pub async fn run(
             decrypted.insert(id, plain);
         }
     }
+    if settings.sync_keys && desktop {
+        let mut accounts = open_accounts(&settings, &journal).await?;
+        if !account_edits.document.entries.is_empty() {
+            // Authenticate the existing ciphertext before applying local account
+            // edits, including revocations, even when those edits would win.
+            journal.merge(&account_edits.document)?;
+            accounts = open_accounts(&settings, &journal).await?;
+        }
+        for (id, plain) in accounts {
+            journal
+                .secret_hashes
+                .insert(id.clone(), crate::comics::digest(plain.as_bytes()));
+            decrypted.insert(id, plain);
+        }
+    }
     let digest = journal.digest();
-    if digest != journal.uploaded || !own_exists {
+    for &collection in collections {
+        let own = format!("replayer/v1/{collection}/{}.json", settings.device_id);
+        let mut document = journal.document.clone();
+        document
+            .entries
+            .retain(|key, _| collection_for(key) == collection);
+        let own_exists = own_state.contains_key(&own);
+        let own_etag = own_state.get(&own).and_then(|v| v.as_deref());
+        if collection != "devices" && !own_exists && document.entries.is_empty() {
+            continue;
+        }
+        if digest == journal.uploaded && own_exists {
+            continue;
+        }
         ensure!(
             !own_exists || own_etag.is_some(),
             "WebDAV 服务未提供版本校验 / WebDAV server did not provide an ETag"
         );
-        let etag = http
-            .put(
-                &own,
-                serde_json::to_vec(&journal.document)?,
-                own_etag.as_deref(),
-            )
-            .await?;
+        let body = serde_json::to_vec(&document)?;
+        ensure!(body.len() <= MAX_BODY, "Sync document exceeds size limit");
+        let etag = http.put(&own, body, own_etag).await?;
         journal.remote_etags.remove(&own);
         if let Some(etag) = etag {
             journal.remote_etags.insert(own, etag);
         }
-        journal.uploaded = digest;
     }
+    journal.uploaded = digest;
     journal.last_success = crate::comics::now();
     Ok(Report {
         journal,
         secrets: decrypted,
     })
+}
+
+async fn open_accounts(settings: &Settings, journal: &Journal) -> Result<BTreeMap<String, String>> {
+    let mut accounts = BTreeMap::new();
+    for id in ACCOUNT_KEYS {
+        let Some(entry) = journal.document.entries.get(id) else {
+            continue;
+        };
+        let plain = if let Some(value) = &entry.value {
+            let sealed: crypto::Sealed = serde_json::from_value(value.clone())?;
+            let phrase = settings.passphrase.clone();
+            let bytes =
+                tokio::task::spawn_blocking(move || crypto::open(&phrase, id, &sealed)).await??;
+            String::from_utf8(bytes)?
+        } else {
+            String::new()
+        };
+        accounts.insert(id.into(), plain);
+    }
+    Ok(accounts)
 }
 
 pub async fn test(settings: Settings) -> Result<()> {

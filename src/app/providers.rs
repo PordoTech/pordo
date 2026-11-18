@@ -74,26 +74,6 @@ impl App {
                 .map(|p| p.id.clone());
             state.initialized = true;
         }
-        if let Some(error) = &self.preferences_draft.credential_error {
-            ui.colored_label(Color32::LIGHT_RED, l.error(error));
-            if design::control(
-                ui,
-                l.text("重新读取密钥", "Reload saved keys"),
-                Some(icons::refresh),
-                design::Control::Outline,
-                0.0,
-            )
-            .clicked()
-            {
-                self.config_message = match self
-                    .preferences_draft
-                    .load_credentials(&crate::credentials::SystemVault)
-                {
-                    Ok(()) => l.text("已重新读取密钥", "Keys reloaded").into(),
-                    Err(error) => l.error(&error.to_string()),
-                };
-            }
-        }
         let mut remove = None;
         for provider in &mut self.preferences_draft.ai.providers {
             ui.push_id(provider.id.clone(), |ui| {

@@ -391,6 +391,7 @@ struct Objects {
     files: Mutex<BTreeMap<String, (Vec<u8>, usize)>>,
     writes: AtomicUsize,
     fail: AtomicBool,
+    fail_playlist_writes: AtomicBool,
     traffic_exhausted: AtomicBool,
     read_forbidden: AtomicBool,
     omit_listing_etags: AtomicBool,
@@ -467,7 +468,8 @@ impl Server {
                     None => response(404, vec![], None),
                 },
                 "PUT" => {
-                    if objects.fail.load(Ordering::Relaxed) {
+                    if objects.fail.load(Ordering::Relaxed)
+                        || objects.fail_playlist_writes.load(Ordering::Relaxed) && path.contains("/playlists/") {
                         return response(503, vec![], None);
                     }
                     if create && files.contains_key(&path)
@@ -562,6 +564,185 @@ async fn two_devices_exchange_metadata_skip_unchanged_uploads_and_keep_offline_d
         .unwrap()
         .journal;
     assert_eq!(ja.values()["ai/p/name"], json!("Offline provider"));
+}
+
+#[tokio::test]
+async fn playlists_sync_in_isolated_collection_survive_legacy_metadata_writes_and_merge_deletions()
+{
+    let server = Server::new().await;
+    let a = server.settings();
+    let b = server.settings();
+    let key = format!("playlist/{}", uuid::Uuid::new_v4());
+    let original = json!({"name":"Home", "tracks":["a", "b"]});
+    let mut ja = journal(&a.device_id);
+    ja.write(key.clone(), Some(original.clone()));
+    ja.write("song/x/favorite".into(), Some(json!(true)));
+    server
+        .objects
+        .fail_playlist_writes
+        .store(true, Ordering::Relaxed);
+    assert!(
+        webdav::run(a.clone(), ja.clone(), BTreeMap::new())
+            .await
+            .is_err()
+    );
+    assert!(
+        server
+            .objects
+            .files
+            .lock()
+            .unwrap()
+            .contains_key(&format!("/dav/replayer/v1/devices/{}.json", a.device_id))
+    );
+    server
+        .objects
+        .fail_playlist_writes
+        .store(false, Ordering::Relaxed);
+    let mut ja = webdav::run(a.clone(), ja, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    {
+        let files = server.objects.files.lock().unwrap();
+        let normal: Document = serde_json::from_slice(
+            &files[&format!("/dav/replayer/v1/devices/{}.json", a.device_id)].0,
+        )
+        .unwrap();
+        assert!(!normal.entries.contains_key(&key));
+        let playlists: Document = serde_json::from_slice(
+            &files[&format!("/dav/replayer/v1/playlists/{}.json", a.device_id)].0,
+        )
+        .unwrap();
+        assert!(playlists.entries.contains_key(&key));
+        assert!(!playlists.entries.contains_key("song/x/favorite"));
+    }
+    let mut jb = webdav::run(b.clone(), journal(&b.device_id), BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(jb.values()[&key], original);
+    let writes = server.objects.writes.load(Ordering::Relaxed);
+    jb = webdav::run(b.clone(), jb, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(writes, server.objects.writes.load(Ordering::Relaxed));
+    // An old client only rewrites its v1 device document. The playlist stays safe.
+    {
+        let mut files = server.objects.files.lock().unwrap();
+        let (bytes, version) = files
+            .get_mut(&format!("/dav/replayer/v1/devices/{}.json", a.device_id))
+            .unwrap();
+        let mut normal: Document = serde_json::from_slice(bytes).unwrap();
+        normal.entries.clear();
+        *bytes = serde_json::to_vec(&normal).unwrap();
+        *version += 100;
+    }
+    ja = webdav::run(a.clone(), ja, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    assert_eq!(ja.values()[&key], original);
+    let stale = jb.document.clone();
+    ja.write(key.clone(), Some(json!(false)));
+    webdav::run(a, ja, BTreeMap::new()).await.unwrap();
+    jb = webdav::run(b, jb, BTreeMap::new()).await.unwrap().journal;
+    assert_eq!(jb.values()[&key], json!(false));
+    jb.merge(&stale).unwrap();
+    assert_eq!(jb.values()[&key], json!(false));
+}
+
+#[tokio::test]
+async fn desktop_accounts_are_opt_in_encrypted_and_revocations_beat_stale_sessions() {
+    use webdav::{BILIBILI_ACCOUNT, KOMIIC_ACCOUNT, KOMIIC_SESSION, run_desktop};
+    let server = Server::new().await;
+    let mut home = server.settings();
+    home.sync_keys = true;
+    home.passphrase = "independent-test-passphrase".into();
+    let mut laptop = server.settings();
+    let mut source = journal(&home.device_id);
+    let lyric = format!("lyric/online/track/{}", home.device_id);
+    source.write(lyric.clone(), Some(json!("[00:01.00]Fixture")));
+    let accounts = BTreeMap::from([
+        (BILIBILI_ACCOUNT.into(), "fixture-bilibili-session".into()),
+        (KOMIIC_ACCOUNT.into(), "fixture-komiic-credentials".into()),
+        (KOMIIC_SESSION.into(), "fixture-komiic-session".into()),
+    ]);
+    let initial = run_desktop(home.clone(), source, BTreeMap::new(), accounts.clone())
+        .await
+        .unwrap();
+    assert_eq!(initial.secrets, accounts);
+    {
+        let files = server.objects.files.lock().unwrap();
+        for (path, (bytes, _)) in files.iter() {
+            let text = std::str::from_utf8(bytes).unwrap();
+            assert!(!accounts.values().any(|secret| text.contains(secret)));
+            if path.contains("/devices/") {
+                assert!(!text.contains("account/") && !text.contains("lyric/"));
+            }
+        }
+    }
+    let off = run_desktop(
+        laptop.clone(),
+        journal(&laptop.device_id),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    assert!(off.secrets.is_empty());
+    assert_eq!(off.journal.values()[&lyric], json!("[00:01.00]Fixture"));
+    let legacy = webdav::run(laptop.clone(), journal(&laptop.device_id), BTreeMap::new())
+        .await
+        .unwrap();
+    assert!(!legacy.journal.document.entries.contains_key(&lyric));
+    assert!(
+        !legacy
+            .journal
+            .document
+            .entries
+            .contains_key(BILIBILI_ACCOUNT)
+    );
+    laptop.sync_keys = true;
+    laptop.passphrase = "incorrect-test-passphrase".into();
+    let writes = server.objects.writes.load(Ordering::Relaxed);
+    let sign_out = BTreeMap::from([(BILIBILI_ACCOUNT.into(), String::new())]);
+    assert!(
+        run_desktop(
+            laptop.clone(),
+            off.journal.clone(),
+            BTreeMap::new(),
+            sign_out.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(writes, server.objects.writes.load(Ordering::Relaxed));
+    laptop.passphrase = home.passphrase.clone();
+    let pulled = run_desktop(
+        laptop.clone(),
+        off.journal,
+        BTreeMap::new(),
+        BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(pulled.secrets, accounts);
+    let stale = pulled.journal.document.clone();
+    run_desktop(home, initial.journal, BTreeMap::new(), sign_out)
+        .await
+        .unwrap();
+    let mut after = run_desktop(laptop, pulled.journal, BTreeMap::new(), accounts)
+        .await
+        .unwrap();
+    assert_eq!(after.secrets[BILIBILI_ACCOUNT], "");
+    assert_eq!(after.secrets[KOMIIC_SESSION], "fixture-komiic-session");
+    after.journal.merge(&stale).unwrap();
+    assert!(
+        after.journal.document.entries[BILIBILI_ACCOUNT]
+            .value
+            .is_none()
+    );
 }
 
 #[tokio::test]

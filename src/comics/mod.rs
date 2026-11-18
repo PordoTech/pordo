@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Settings {
     pub komiic: source::KomiicAccount,
+    pub komiic_signed_out: bool,
     pub image_selected: crate::ai::ModelRef,
     #[serde(skip_serializing)]
     pub image_base_url: String,
@@ -31,6 +32,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             komiic: Default::default(),
+            komiic_signed_out: false,
             image_selected: Default::default(),
             image_base_url: String::new(),
             image_model: String::new(),

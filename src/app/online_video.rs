@@ -72,6 +72,7 @@ pub(super) struct State {
     requested_page: usize,
     resume: Option<f64>,
     keep_position: bool,
+    pub(super) resume_speed: Option<f32>,
     pub(in crate::app) previews: cards::Previews,
 }
 impl State {
@@ -79,6 +80,7 @@ impl State {
         self.cancel_discovery();
         self.playing = None;
         self.active = None;
+        self.resume_speed = None;
     }
     pub(super) fn record_path(&self, source: Option<&PathBuf>) -> Option<String> {
         self.active
@@ -267,13 +269,18 @@ impl App {
                 let saved =
                     tokio::task::spawn_blocking(|| SystemVault.get(&Settings::bilibili_target()))
                         .await??;
-                let saved = saved.map(|s| serde_json::from_str::<bilibili::Session>(&s)).transpose()
+                let saved = saved.filter(|s| !s.is_empty()).map(|s| serde_json::from_str::<bilibili::Session>(&s)).transpose()
                     .map_err(|_| anyhow::anyhow!("已保存的B站会话无效，请退出后重试 / Invalid saved Bilibili session; sign out and retry"))?;
                 let api = Arc::new(Bilibili::new(saved.as_ref())?);
                 let account = if saved.is_some() {
                     api.account().await.ok()
                 } else {
                     None
+                };
+                let api = if saved.is_some() && account.is_none() {
+                    Arc::new(Bilibili::new(None)?)
+                } else {
+                    api
                 };
                 Ok((api, account))
             }));
@@ -427,7 +434,51 @@ impl App {
             })
         }));
     }
+    pub(super) fn cloud_video_account_busy(&self) -> bool {
+        self.online_video.save.is_some()
+            || self.online_video.poll.is_some()
+            || self.online_video.qr.is_some()
+    }
+    pub(super) fn cloud_video_session(&self) -> anyhow::Result<Option<String>> {
+        if self.cloud_video_account_busy() {
+            return Ok(None);
+        }
+        SystemVault.get(&Settings::bilibili_target())
+    }
+    pub(super) fn apply_cloud_video_session(&mut self, value: &str) -> anyhow::Result<()> {
+        if !value.is_empty() {
+            let session: bilibili::Session = serde_json::from_str(value)
+                .map_err(|_| anyhow::anyhow!("Invalid synced Bilibili session"))?;
+            Bilibili::new(Some(&session))?;
+        }
+        SystemVault.set(&Settings::bilibili_target(), Some(value))?;
+        if value.is_empty() {
+            self.reset_video_account();
+        } else {
+            let active = self.online_video.api.is_some() || self.online_video.init.is_some();
+            let state = &mut self.online_video;
+            state.close_login();
+            state.init = None;
+            state.api = None;
+            state.account = None;
+            state.ready = None;
+            state.resolve = None;
+            state.auth_status.clear();
+            if active {
+                self.ensure_video_api();
+            }
+        }
+        Ok(())
+    }
     fn video_sign_out(&mut self) {
+        self.reset_video_account();
+        self.online_video.save = Some(Job::spawn(|_| async {
+            tokio::task::spawn_blocking(|| SystemVault.set(&Settings::bilibili_target(), Some("")))
+                .await??;
+            Ok(())
+        }));
+    }
+    fn reset_video_account(&mut self) {
         // Drop playback before its loopback transport, including in-flight reads.
         if self.online_video.playing.is_some() {
             self.update_library();
@@ -445,11 +496,6 @@ impl App {
         state.ready = None;
         state.detail = None;
         state.api = Bilibili::new(None).ok().map(Arc::new);
-        state.save = Some(Job::spawn(|_| async {
-            tokio::task::spawn_blocking(|| SystemVault.set(&Settings::bilibili_target(), None))
-                .await??;
-            Ok(())
-        }));
         state.auth_status = self
             .settings
             .language
@@ -672,6 +718,11 @@ impl App {
                     } else {
                         (resume, true)
                     };
+                    let speed = if keep_position {
+                        self.player.as_ref().map(Player::speed)
+                    } else {
+                        None
+                    };
                     let subtitles = keep_position.then(|| {
                         (
                             std::mem::take(&mut self.subtitles),
@@ -695,6 +746,7 @@ impl App {
                         _source: source,
                     });
                     self.online_video.active = Some(active);
+                    self.online_video.resume_speed = speed;
                     self.online_video.resume = None;
                     self.workspace.resume = resume.map(|position| (path, position));
                     self.online_video.cancel_discovery();
@@ -783,12 +835,20 @@ impl App {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if self.online_video.account.is_some() {
-                    signout = ui
-                        .add_enabled(
-                            self.online_video.save.is_none(),
-                            egui::Button::new(l.text("退出登录", "Sign out")),
-                        )
-                        .clicked();
+                    let response = ui.add_enabled(
+                        self.online_video.save.is_none(),
+                        egui::Button::new(l.text("退出登录", "Sign out")),
+                    );
+                    signout = if self.settings.sync.enabled && self.settings.sync.sync_keys {
+                        response
+                            .on_hover_text(l.text(
+                                "同步设备也会在下次同步时退出",
+                                "Other devices will sign out on their next sync",
+                            ))
+                            .clicked()
+                    } else {
+                        response.clicked()
+                    };
                 } else {
                     login = ui
                         .add_enabled(

@@ -7,7 +7,10 @@ use std::{sync::Arc, time::Duration};
 mod dm5;
 mod komiic;
 mod sources;
-pub use komiic::{AccountSettings as KomiicAccount, AuthStatus as KomiicAuthStatus, Komiic};
+pub use komiic::{
+    AccountSettings as KomiicAccount, AuthStatus as KomiicAuthStatus, Komiic,
+    SessionCookies as KomiicSessionCookies,
+};
 pub use sources::Sources;
 pub type UpdateSummaries = Vec<(String, UpdateSummary)>;
 

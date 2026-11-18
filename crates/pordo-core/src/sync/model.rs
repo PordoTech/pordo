@@ -29,6 +29,8 @@ pub struct Journal {
     pub uploaded: String,
     pub last_success: u64,
     pub secret_hashes: BTreeMap<String, String>,
+    // Desktop's one-time repair of legacy implicit song deletions. Local only.
+    pub music_repaired: bool,
     // Local transport state only; never included in the uploaded Document.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub remote_etags: BTreeMap<String, String>,

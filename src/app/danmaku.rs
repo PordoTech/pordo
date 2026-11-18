@@ -308,18 +308,14 @@ impl App {
                 }
             }
         });
-        if let Some(value) = selected {
-            if let Some(player) = &self.player
-                && let Some(id) = player.set_speed(value)
-            {
-                let position = self
-                    .pending_seek
-                    .map_or_else(|| player.position(), |(_, p)| p);
-                self.pending_seek = Some((id, position));
-            }
-            self.settings.video.speed = (value * 100.0) as u16;
-            self.preferences_draft.video.speed = self.settings.video.speed;
-            self.persist_video_controls();
+        if let Some(value) = selected
+            && let Some(player) = &self.player
+            && let Some(id) = player.set_speed(value)
+        {
+            let position = self
+                .pending_seek
+                .map_or_else(|| player.position(), |(_, p)| p);
+            self.pending_seek = Some((id, position));
         }
     }
     pub(in crate::app) fn danmaku_button(&mut self, ui: &mut Ui, alpha: f32) {

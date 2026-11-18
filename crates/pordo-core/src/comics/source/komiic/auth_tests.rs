@@ -147,6 +147,32 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn imported_session_is_verified_without_resending_the_password() {
+    let fixture = Fixture::new().await;
+    let account = settings(false);
+    fixture.source.configure_account(account.clone()).unwrap();
+    fixture.source.login().await.unwrap();
+    let session = fixture.source.export_session(&account).unwrap();
+    let receiver = Komiic::at(&fixture.source.base).unwrap();
+    receiver.configure_account(account.clone()).unwrap();
+    let expired = serde_json::from_value(json!({"api":"session=expired","refresh":""})).unwrap();
+    assert!(
+        receiver
+            .restore_session(account.clone(), expired)
+            .await
+            .is_err()
+    );
+    assert_eq!(receiver.auth_status().phase, "guest");
+    receiver
+        .restore_session(account.clone(), session.clone())
+        .await
+        .unwrap();
+    assert_eq!(receiver.auth_status().phase, "signed_in");
+    assert!(receiver.export_session(&account).as_ref() == Some(&session));
+    assert_eq!(fixture.counts(), (1, 0));
+}
+
+#[tokio::test]
 async fn concurrent_requests_and_recovery_share_one_authentication() {
     let fixture = Fixture::new().await;
     fixture.source.quota_block(500); // A guest's exhausted quota must not survive sign-in.

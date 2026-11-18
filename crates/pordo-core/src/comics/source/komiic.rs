@@ -2,7 +2,7 @@ use super::*;
 use anyhow::Context;
 mod auth;
 use auth::Sessions;
-pub use auth::{AccountSettings, AuthStatus};
+pub use auth::{AccountSettings, AuthStatus, SessionCookies};
 
 fn number(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
@@ -33,6 +33,16 @@ impl Komiic {
     }
     pub fn auth_status(&self) -> AuthStatus {
         self.sessions.current().status()
+    }
+    pub fn export_session(&self, settings: &AccountSettings) -> Option<SessionCookies> {
+        self.sessions.export(&self.base, settings)
+    }
+    pub async fn restore_session(
+        &self,
+        settings: AccountSettings,
+        cookies: SessionCookies,
+    ) -> Result<()> {
+        self.sessions.restore(&self.base, settings, cookies).await
     }
     pub async fn login(&self) -> Result<AuthStatus> {
         let session = self.sessions.current();
