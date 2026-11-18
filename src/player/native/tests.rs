@@ -732,13 +732,19 @@ fn native_media_long_music_device_outage_keeps_track_and_recovers_after_warning(
     until(&mut player, Duration::from_secs(5), |p, _| {
         p.position() > 0.1
     });
-    let position = player.position();
     player
         .shared
         .output
         .simulated_open_failures
         .store(100, Ordering::Release);
     player.shared.output.failed.store(true, Ordering::Release);
+    // A final callback can advance the clock before the playback worker sees
+    // the injected failure. Measure the freeze after it has dropped the device.
+    until(&mut player, Duration::from_secs(2), |p, _| {
+        let snapshot = p.snapshot();
+        !snapshot.has_audio && snapshot.state == PlaybackState::Buffering
+    });
+    let position = player.position();
     let mut warned = false;
     until(&mut player, Duration::from_secs(13), |p, events| {
         warned |= events.iter().any(|e| matches!(e, Event::Warning(_)));
