@@ -18,6 +18,7 @@ pub(super) struct State {
     errors: BTreeMap<u32, String>,
     active: Vec<Bullet>,
     last: Option<f64>,
+    motion_time: f64,
     geometry: Option<(Rect, DanmakuSettings)>,
 }
 struct Bullet {
@@ -85,6 +86,7 @@ impl State {
         position: f64,
         duration: f64,
         visible: bool,
+        lookback: f64,
     ) {
         let cid = source.as_ref().map(|(_, cid)| *cid);
         if self.cid != cid {
@@ -114,14 +116,16 @@ impl State {
             match result {
                 Ok(comments) => {
                     self.segments.insert(i, comments);
-                    self.last = None;
+                    if i <= index {
+                        self.last = None;
+                    }
                 }
                 Err(error) => {
                     self.errors.insert(i, error.to_string());
                 }
             }
         }
-        let previous = (index > 1 && position % SEGMENT_SECONDS < 12.0).then(|| index - 1);
+        let previous = (index > 1 && position % SEGMENT_SECONDS < lookback).then(|| index - 1);
         let next = (duration > index as f64 * SEGMENT_SECONDS).then_some(index.saturating_add(1));
         for i in [Some(index), previous, next].into_iter().flatten() {
             if self.jobs.len() >= 2 {
@@ -149,7 +153,20 @@ impl State {
         }
     }
 
-    fn paint(&mut self, painter: &Painter, rect: Rect, position: f64, settings: &DanmakuSettings) {
+    pub(super) fn has_scrolling(&self) -> bool {
+        self.active
+            .iter()
+            .any(|bullet| !matches!(bullet.mode, 4 | 5))
+    }
+
+    fn paint(
+        &mut self,
+        painter: &Painter,
+        rect: Rect,
+        position: f64,
+        rate: f64,
+        settings: &DanmakuSettings,
+    ) {
         if !settings.enabled || rect.height() < 20.0 || rect.width() < 40.0 {
             return;
         }
@@ -157,13 +174,19 @@ impl State {
         let rebuild = self.geometry.as_ref() != Some(&geometry)
             || self
                 .last
-                .is_none_or(|last| position < last || position - last > 1.0);
-        let duration = 8.0 / (settings.speed.clamp(50, 200) as f64 / 100.0);
-        let from = if rebuild {
+                .is_none_or(|last| position < last - 0.02 || position - last > rate);
+        let duration = travel_seconds(settings);
+        let (from, position) = if rebuild {
             self.active.clear();
-            position - duration
+            self.motion_time = position;
+            (position - duration * rate, position)
         } else {
-            self.last.unwrap()
+            let last = self.last.unwrap();
+            let position = position.max(last);
+            // Media time schedules comments. Normalized elapsed time moves them
+            // at the selected danmaku speed and freezes them with playback.
+            self.motion_time += (position - last) / rate;
+            (last, position)
         };
         self.geometry = Some(geometry);
         let font =
@@ -174,7 +197,8 @@ impl State {
             let start = comments.partition_point(|c| c.time <= from);
             let end = comments.partition_point(|c| c.time <= position);
             for comment in &comments[start..end] {
-                self.active.retain(|b| b.end > comment.time);
+                let start = self.motion_time - (position - comment.time) / rate;
+                self.active.retain(|b| b.end > start);
                 if self.active.len() >= MAX_ACTIVE {
                     continue;
                 }
@@ -185,8 +209,8 @@ impl State {
                     Color32::WHITE,
                 );
                 let mut bullet = Bullet {
-                    start: comment.time,
-                    end: comment.time
+                    start,
+                    end: start
                         + if matches!(comment.mode, 4 | 5) {
                             duration.min(5.0)
                         } else {
@@ -217,31 +241,39 @@ impl State {
             }
         }
         self.last = Some(position);
-        self.active.retain(|b| b.end > position);
+        self.active.retain(|b| b.end > self.motion_time);
         let alpha = settings.opacity.clamp(10, 100) as f32 / 100.0;
         let mut painter = painter.with_clip_rect(rect);
         painter.multiply_opacity(alpha);
         for bullet in &self.active {
-            let point = rect.min + vec2(bullet.x(position), bullet.row as f32 * row_height);
-            // A small shadow improves readability without rasterizing each glyph repeatedly.
-            painter.galley_with_override_text_color(
-                point + vec2(1.0, 1.0),
-                bullet.text.clone(),
-                Color32::from_black_alpha(220),
-            );
+            let point = rect.min + vec2(bullet.x(self.motion_time), bullet.row as f32 * row_height);
+            for offset in [
+                vec2(-1.0, 0.0),
+                vec2(1.0, 0.0),
+                vec2(0.0, -1.0),
+                vec2(0.0, 1.0),
+            ] {
+                painter.galley_with_override_text_color(
+                    point + offset,
+                    bullet.text.clone(),
+                    Color32::from_black_alpha(220),
+                );
+            }
             painter.galley_with_override_text_color(point, bullet.text.clone(), bullet.color);
         }
     }
 }
 
+fn travel_seconds(settings: &DanmakuSettings) -> f64 {
+    8.0 / (f64::from(settings.speed.clamp(50, 200)) / 100.0)
+}
+
 impl App {
     pub(super) fn poll_danmaku(&mut self, ctx: &egui::Context) {
         let source = self.bilibili_danmaku_source();
-        let (position, duration) = self
-            .player
-            .as_ref()
-            .map(|p| (p.position(), p.duration()))
-            .unwrap_or_default();
+        let (position, duration, rate) = self.player.as_ref().map_or((0.0, 0.0, 1.0), |p| {
+            (p.position(), p.duration(), f64::from(p.speed()))
+        });
         self.danmaku.poll(
             ctx,
             source,
@@ -250,6 +282,7 @@ impl App {
             self.settings.video.danmaku.enabled
                 && self.settings.video.danmaku.area > 0
                 && self.workspace.page == workspace::Page::Playing,
+            travel_seconds(&self.settings.video.danmaku) * rate,
         );
     }
     pub(super) fn paint_danmaku(
@@ -267,14 +300,15 @@ impl App {
         let mut bottom = (video.top() + video.height() * settings.area.min(100) as f32 / 100.0)
             .min(screen.bottom() - BAR_BOTTOM - 12.0)
             .min(video.bottom() - 12.0);
-        if self.subtitles_visible && subtitles::active(&self.subtitles, position).is_some() {
+        if self.subtitles_visible && (!self.subtitles.is_empty() || self.subtitle_job.is_some()) {
             bottom = bottom.min(video.bottom().min(screen.bottom() - BAR_BOTTOM) - 100.0);
         }
         let rect = Rect::from_min_max(
             pos2(video.left() + 12.0, top),
             pos2(video.right() - 12.0, bottom),
         );
-        self.danmaku.paint(painter, rect, position, settings);
+        let rate = self.player.as_ref().map_or(1.0, |p| f64::from(p.speed()));
+        self.danmaku.paint(painter, rect, position, rate, settings);
     }
     pub(in crate::app) fn video_speed_button(&mut self, ui: &mut Ui, alpha: f32) {
         let l = self.settings.language;
@@ -561,6 +595,7 @@ mod tests {
                     ui.painter(),
                     Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 250.0)),
                     time,
+                    1.0,
                     &settings,
                 )
             });
@@ -571,9 +606,48 @@ mod tests {
                 assert!(state.active[i + 1..].iter().all(|b| !a.conflicts(b)));
             }
         }
-        state.poll(&ctx, None, 40.0, 300.0, false);
+        state.poll(&ctx, None, 40.0, 300.0, false, 8.0);
         assert!(state.active.is_empty());
         assert!(state.jobs.is_empty());
+    }
+
+    #[test]
+    fn rate_changes_keep_scrolling_distance_and_media_timestamps() {
+        let ctx = egui::Context::default();
+        let mut state = State::default();
+        let comment = |id, time| Comment {
+            id,
+            time,
+            mode: 1,
+            size: 25,
+            color: 0xffffff,
+            text: "Moving comment".into(),
+        };
+        state
+            .segments
+            .insert(1, vec![comment(1, 10.0), comment(2, 10.4)]);
+        let settings = DanmakuSettings::default();
+        let mut render = |position, rate| {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                state.paint(
+                    ui.painter(),
+                    Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 250.0)),
+                    position,
+                    rate,
+                    &settings,
+                );
+            });
+            output.textures_delta.clear();
+            (state.active[0].x(state.motion_time), state.active.len())
+        };
+        let (start, _) = render(10.01, 1.0);
+        let (normal, count) = render(10.11, 1.0);
+        assert_eq!(count, 1);
+        let (fast, count) = render(10.41, 3.0);
+        assert_eq!(count, 2);
+        assert!(((start - normal) - (normal - fast)).abs() < 0.01);
+        let (paused, _) = render(10.41, 3.0);
+        assert_eq!(paused, fast);
     }
 
     #[test]

@@ -45,6 +45,16 @@ pub struct Connection {
     pub model: String,
 }
 
+pub(crate) fn model_json(content: &str) -> Option<&str> {
+    let text = content.trim();
+    if text.starts_with("```") {
+        text.split_once('\n')
+            .and_then(|(_, body)| body.rsplit_once("```").map(|(json, _)| json))
+    } else {
+        Some(text)
+    }
+}
+
 pub fn endpoint(base: &str) -> Result<reqwest::Url> {
     let url = reqwest::Url::parse(base.trim())
         .map_err(|_| anyhow::anyhow!("服务地址无效 / Invalid service endpoint"))?;

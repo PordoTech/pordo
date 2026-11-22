@@ -98,7 +98,7 @@ impl App {
                         .clicked()
                         && self.updater.install().is_ok()
                     {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        self.request_close(ctx);
                     }
                 } else if workspace::primary(ui, language.text("下载更新", "Download update"))
                     .clicked()
@@ -243,11 +243,8 @@ impl App {
             self.updater.download();
         }
         if install && self.updater.install().is_ok() {
-            self.comic.flush();
-            self.update_library();
-            self.library.flush();
             self.persist_queue();
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.request_close(ctx);
         }
     }
 }

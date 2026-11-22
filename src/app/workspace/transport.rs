@@ -344,6 +344,19 @@ impl App {
             return;
         }
         self.paint_video_skip_markers(ui, rect, duration, alpha);
+        let language = self.settings.language;
+        let response = if let Some(point) = response.hover_pos()
+            && self
+                .video_skip
+                .ai_marker_at(
+                    f64::from(((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0)) * duration,
+                )
+                .is_some()
+        {
+            response.on_hover_text(language.text("AI 识别", "Detected by AI"))
+        } else {
+            response
+        };
         if response.dragged()
             && let Some(p) = response.interact_pointer_pos()
         {

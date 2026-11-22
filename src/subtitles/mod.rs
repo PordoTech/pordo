@@ -1,6 +1,6 @@
-mod api;
+pub(crate) mod api;
 #[path = "native/audio.rs"]
-mod audio;
+pub(crate) mod audio;
 #[path = "native/mp3.rs"]
 mod mp3;
 mod scheduler;
@@ -363,14 +363,7 @@ fn parse_cues_mode(content: &str, start: f64, duration: f64, bilingual: bool) ->
         Compact { c: Vec<Row> },
         Legacy { segments: Vec<Cue> },
     }
-    let text = content.trim();
-    let text = if text.starts_with("```") {
-        text.split_once('\n')
-            .and_then(|(_, body)| body.rsplit_once("```").map(|(json, _)| json))
-            .context("字幕 JSON 代码块不完整")?
-    } else {
-        text
-    };
+    let text = crate::ai::model_json(content).context("字幕 JSON 代码块不完整")?;
     let result: Transcript = serde_json::from_str(text)
         .context("模型没有返回有效的字幕 JSON，请重试或更换支持音频的模型")?;
     let mut cues = match result {

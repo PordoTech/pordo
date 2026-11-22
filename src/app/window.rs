@@ -314,7 +314,7 @@ impl App {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized))
                             }
                             _ => {
-                                self.request_cloud_close(&ctx);
+                                self.request_close(&ctx);
                             }
                         }
                     }

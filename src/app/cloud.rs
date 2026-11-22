@@ -20,7 +20,6 @@ pub(super) struct State {
     capture_after: Instant,
     startup: bool,
     urgent: bool,
-    closing: Option<Instant>,
     close_ready: bool,
     probe_settings: Option<sync::Settings>,
     changed: Option<Instant>,
@@ -43,7 +42,6 @@ impl Default for State {
             capture_after: Instant::now(),
             startup: false,
             urgent: false,
-            closing: None,
             close_ready: false,
             probe_settings: None,
             changed: None,
@@ -117,10 +115,6 @@ impl App {
     pub(in crate::app) fn video_updates_cloud_ready(&self) -> bool {
         !self.settings.sync.enabled || self.cloud.video_ready
     }
-    pub(super) fn cloud_closing(&self) -> bool {
-        self.cloud.closing.is_some()
-    }
-
     fn cloud_session(&self) -> Option<String> {
         match self.workspace.page {
             workspace::Page::Comic => self.comic.reading_session(),
@@ -152,44 +146,36 @@ impl App {
         }
     }
 
-    pub(super) fn request_cloud_close(&mut self, ctx: &egui::Context) {
-        if self.cloud.closing.is_none() && !self.cloud.close_ready {
-            self.cloud.probe = None;
-            self.cloud.probe_settings = None;
-            if let Some(player) = &self.player {
-                player.set_playing(false);
-            }
-            self.checkpoint_cloud();
-            self.cloud.closing = Some(Instant::now() + Duration::from_secs(8));
+    fn finish_close(&mut self) {
+        if self.cloud.close_ready {
+            return;
         }
-        self.poll_cloud_close(ctx);
+        self.cloud.close_ready = true;
+        self.cloud.job = None;
+        self.cloud.probe = None;
+        self.video_skip = Default::default();
+        self.update_library();
+        self.library.flush();
+        self.comic.flush();
+        if self.settings.sync.enabled
+            && self.cloud.configured.as_ref() == Some(&self.settings.sync)
+            && self.cloud.journal.is_some()
+            && let Err(error) = self.capture_cloud_snapshot(true)
+        {
+            eprintln!("Unable to save pending cloud changes: {error}");
+        }
     }
 
-    pub(super) fn poll_cloud_close(&mut self, ctx: &egui::Context) {
-        if !self.cloud.close_ready && ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.cloud.closing.is_none() {
-                self.request_cloud_close(ctx);
-                return;
-            }
+    pub(super) fn request_close(&mut self, ctx: &egui::Context) {
+        self.finish_close();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    pub(super) fn should_close(&mut self, ctx: &egui::Context) -> bool {
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.finish_close();
         }
-        let Some(deadline) = self.cloud.closing else {
-            return;
-        };
-        let pending = self.settings.sync.enabled
-            && self.cloud.journal.is_some()
-            && (self.cloud.job.is_some() || self.cloud.urgent || self.cloud.changed.is_some());
-        if !pending || Instant::now() >= deadline {
-            // The checkpoint was saved before network I/O. A failed/slow exit
-            // upload remains pending and is retried on the next startup.
-            self.cloud.job = None;
-            self.cloud.close_ready = true;
-            self.cloud.closing = None;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        } else {
-            self.cloud.urgent |= self.cloud.changed.is_some();
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
+        self.cloud.close_ready
     }
 
     fn cloud_accounts(&self) -> BTreeMap<String, String> {
@@ -334,15 +320,9 @@ impl App {
         data
     }
 
-    fn capture_cloud(&mut self, progress: bool) -> anyhow::Result<bool> {
+    fn capture_cloud_snapshot(&mut self, progress: bool) -> anyhow::Result<bool> {
         self.playlists.cloud_ready()?;
-        if progress {
-            self.update_library();
-            self.library.flush();
-            self.comic.flush();
-        }
         let mut snapshot = self.cloud_snapshot();
-        let accounts = self.cloud_accounts();
         let Some(journal) = &mut self.cloud.journal else {
             return Ok(false);
         };
@@ -350,6 +330,23 @@ impl App {
             sync::portable::defer_progress(&mut snapshot, &journal.observed);
         }
         let changed = journal.capture(snapshot, &settings_snapshot(&Settings::default()));
+        if changed {
+            journal.save(&self.cloud.path)?;
+        }
+        Ok(changed)
+    }
+
+    fn capture_cloud(&mut self, progress: bool) -> anyhow::Result<bool> {
+        if progress {
+            self.update_library();
+            self.library.flush();
+            self.comic.flush();
+        }
+        let changed = self.capture_cloud_snapshot(progress)?;
+        let Some(journal) = &self.cloud.journal else {
+            return Ok(changed);
+        };
+        let accounts = self.cloud_accounts();
         let keys_changed = self.settings.sync.sync_keys
             && secrets(&self.settings)
                 .iter()
@@ -361,9 +358,6 @@ impl App {
                         && journal.secret_hashes.get(id)
                             != Some(&crate::comics::digest(key.as_bytes()))
                 });
-        if changed {
-            journal.save(&self.cloud.path)?;
-        }
         Ok(changed || keys_changed)
     }
 
@@ -1520,7 +1514,7 @@ mod tests {
     }
 
     #[test]
-    fn close_saves_latest_progress_and_bounds_waiting_for_a_stalled_sync() {
+    fn close_saves_latest_progress_and_cancels_sync_without_starting_another() {
         let ctx = egui::Context::default();
         let directory = directory();
         let mut app = configured(&ctx, &directory);
@@ -1535,23 +1529,23 @@ mod tests {
             .unwrap()
             .events
             .push(egui::ViewportEvent::Close);
-        let mut output = ctx.run_ui(input, |ui| app.poll_cloud_close(ui.ctx()));
+        let mut output = ctx.run_ui(input, |ui| {
+            assert!(app.should_close(ui.ctx()));
+            app.cloud.urgent = true;
+            app.poll_cloud(ui.ctx());
+            assert!(app.cloud.job.is_none());
+        });
         assert!(
-            output.viewport_output[&egui::ViewportId::ROOT]
+            !output.viewport_output[&egui::ViewportId::ROOT]
                 .commands
                 .contains(&egui::ViewportCommand::CancelClose)
         );
         output.textures_delta.clear();
-        assert!(app.cloud.closing.is_some());
-        assert!(!app.cloud.close_ready);
+        assert!(app.cloud.close_ready);
         let restored = sync::Journal::load(&app.cloud.path, &app.settings.sync.device_id).unwrap();
         let key = format!("song/{}/progress", song().key());
         assert_eq!(restored.values()[&key]["position"], 45.0);
         assert_ne!(restored.digest(), restored.uploaded);
-        app.cloud.closing = Some(Instant::now() - Duration::from_secs(1));
-        app.poll_cloud_close(&ctx);
-        assert!(app.cloud.close_ready);
-        assert!(app.cloud.job.is_none());
         drop(app);
         std::fs::remove_dir_all(directory).unwrap();
     }

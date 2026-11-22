@@ -212,28 +212,24 @@ impl App {
             .source
             .as_ref()
             .map(|source| source.komiic().auth_status());
-        let message = self
-            .comic
-            .auth_error
-            .as_deref()
-            .or_else(|| status.as_ref().map(|s| s.label()))
-            .unwrap_or("");
-        ui.label(message);
-        if let Some(status) = status {
-            if !status.nickname.is_empty() {
-                ui.label(status.nickname);
-            }
-            if let (Some(used), Some(limit)) = (status.usage, status.limit) {
-                ui.label(format!(
-                    "{}: {used}/{limit}",
-                    l.text("图片用量", "Image usage")
-                ));
+        if let Some(error) = &self.comic.auth_error {
+            ui.label(l.error(error));
+        } else if let Some(status) = status {
+            if status.phase == "signed_in" {
+                let signed_in = l.text("已登录", "Signed in");
+                let mut line = if status.nickname.is_empty() {
+                    signed_in.to_owned()
+                } else {
+                    format!("{} · {signed_in}", status.nickname)
+                };
+                if let (Some(used), Some(limit)) = (status.usage, status.limit) {
+                    line.push_str(&format!(" · {used}/{limit}{}", l.text(" 张", " images")));
+                }
+                ui.add(egui::Label::new(line).truncate());
+            } else {
+                ui.label(l.error(status.label()));
             }
         }
-        ui.label(l.text(
-            "开启「同步密钥」后，账号和登录状态会加密同步。",
-            "Sync credentials encrypts and syncs the account and sign-in state.",
-        ));
         ui.separator();
     }
 }

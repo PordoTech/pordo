@@ -183,6 +183,13 @@ impl Default for LlmSettings {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct VideoSkipAiSettings {
+    pub enabled: bool,
+    pub selected: crate::ai::ModelRef,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
@@ -196,6 +203,7 @@ pub struct Settings {
     pub llm: LlmSettings,
     pub music: crate::music_sources::Settings,
     pub video: pordo_core::video_sources::Settings,
+    pub video_skip_ai: VideoSkipAiSettings,
     pub comics: crate::comics::Settings,
 }
 impl Default for Settings {
@@ -210,6 +218,7 @@ impl Default for Settings {
             llm: LlmSettings::default(),
             music: Default::default(),
             video: Default::default(),
+            video_skip_ai: Default::default(),
             comics: Default::default(),
         }
     }

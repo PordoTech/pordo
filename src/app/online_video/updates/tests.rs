@@ -43,6 +43,20 @@ fn snapshot(state: &State) -> Snapshot {
 }
 
 #[test]
+fn video_updates_queue_favorites_automatically_at_startup() {
+    let ctx = egui::Context::default();
+    let mut app = comic::visual_tests::settings_fixture(&ctx);
+    app.library.creators = vec![creator(1)];
+    // Leave API initialization pending so the test observes the queue without making a request.
+    app.online_video.init = Some(Job::spawn(|_| std::future::pending()));
+    app.poll_video_updates(&ctx);
+    assert_eq!(
+        app.online_video.updates.queue.front().map(String::as_str),
+        Some("1/42")
+    );
+}
+
+#[test]
 fn video_updates_baseline_deduplicates_and_keeps_historical_uploads_seen() {
     let mut state = State::default();
     baseline(&mut state);
@@ -198,7 +212,6 @@ fn video_updates_visuals() {
         let ctx = egui::Context::default();
         let mut app = comic::visual_tests::settings_fixture(&ctx);
         app.settings.language = language;
-        app.settings.video.check_updates = false;
         app.library = library::Library::open(directory.join("fixture-library.json"));
         app.library.creators = vec![creator(1), creator(2), creator(3)];
         app.online_video.updates = State::default();
@@ -346,7 +359,6 @@ fn video_updates_discovered_posts_use_existing_history_without_exporting_unrelat
     std::fs::create_dir_all(&directory).unwrap();
     let ctx = egui::Context::default();
     let mut app = comic::visual_tests::settings_fixture(&ctx);
-    app.settings.video.check_updates = false;
     app.library = library::Library::open(directory.join("library.json"));
     app.library.creators = vec![creator(1)];
     app.library.records = vec![
@@ -393,7 +405,6 @@ fn video_updates_rate_limit_stops_the_batch_without_clearing_unseen_content() {
     std::fs::create_dir_all(&directory).unwrap();
     let ctx = egui::Context::default();
     let mut app = comic::visual_tests::settings_fixture(&ctx);
-    app.settings.video.check_updates = false;
     app.library = library::Library::open(directory.join("library.json"));
     app.library.creators = vec![creator(1), creator(2)];
     app.online_video.updates = State::default();

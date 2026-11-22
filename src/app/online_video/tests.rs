@@ -271,11 +271,18 @@ fn account_controls_live_in_video_source_settings_not_search() {
             < settings.iter().position(|s| s == "AI subtitles").unwrap()
     );
     assert!(settings.iter().any(|s| s == "Video"));
-    for label in ["Auto-skip intro", "Auto-skip outro"] {
+    for label in [
+        "Auto-skip intro and outro",
+        "Use AI when markers are missing",
+    ] {
         let position = settings.iter().position(|s| s == label).expect(label);
         assert!(position > settings.iter().position(|s| s == "Bilibili").unwrap());
         assert!(position < settings.iter().position(|s| s == "AI subtitles").unwrap());
     }
+    assert!(!settings.iter().any(|s| s == "Check creator updates"));
+    assert!(app.settings.video.skip);
+    assert!(!app.settings.video_skip_ai.enabled);
+    assert!(!settings.iter().any(|s| s == "Audio analysis model"));
     assert!(
         app.workspace.page != workspace::Page::Video,
         "Viewing account settings must not navigate to video search"

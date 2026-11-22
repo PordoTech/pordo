@@ -144,7 +144,7 @@ mod tests {
         let path = "https://www.bilibili.com/video/BV1GJ411x7h7?p=1";
         app.online_video.playing = Some(Playing {
             path: path.into(),
-            _source: source,
+            source,
         });
         app.online_video.active = Some(video);
         assert_eq!(app.active_record_path(), Some(path.into()));
@@ -300,10 +300,7 @@ mod tests {
         app.mode = UiMode::Video;
         app.ui_kind_music = Some(false);
         app.loading = false;
-        app.settings.video.skip = pordo_core::video_sources::SkipSettings {
-            intro: true,
-            outro: true,
-        };
+        assert!(app.settings.video.skip);
         app.video_skip = crate::app::video_skip::State::seeded(
             ("BV1GJ411x7h7".into(), 1),
             vec![
@@ -323,6 +320,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut targets = Vec::new();
         let mut ended = false;
+        let mut checked_disabled = false;
         while Instant::now() < deadline {
             let p = app.player.as_mut().unwrap();
             while let Some(event) = p.poll_event() {
@@ -342,6 +340,13 @@ mod tests {
             if ended {
                 break;
             }
+            if !checked_disabled && p.snapshot().state == PlaybackState::Playing && pos < 0.6 {
+                app.settings.video.skip = false;
+                app.poll_video_skip(&ctx);
+                assert!(app.pending_seek.is_none());
+                app.settings.video.skip = true;
+                checked_disabled = true;
+            }
             app.poll_video_skip(&ctx);
             if let Some((_, target)) = app.pending_seek
                 && targets.last() != Some(&target)
@@ -351,6 +356,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(4));
         }
         assert!(ended, "ED skip must reach normal EOF");
+        assert!(checked_disabled);
         assert_eq!(targets, vec![0.6, 3.0]);
     }
 

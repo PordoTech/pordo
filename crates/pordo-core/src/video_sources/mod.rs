@@ -5,26 +5,39 @@ pub mod bilibili;
 #[serde(default)]
 pub struct Settings {
     pub source: String,
-    pub check_updates: bool,
     pub danmaku: DanmakuSettings,
-    pub skip: SkipSettings,
+    #[serde(deserialize_with = "deserialize_skip")]
+    pub skip: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             source: "bilibili".into(),
-            check_updates: true,
             danmaku: Default::default(),
-            skip: Default::default(),
+            skip: true,
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct SkipSettings {
-    pub intro: bool,
-    pub outro: bool,
+fn deserialize_skip<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Unified(bool),
+        Separate {
+            #[serde(default)]
+            intro: bool,
+            #[serde(default)]
+            outro: bool,
+        },
+    }
+    Ok(
+        match <Saved as serde::Deserialize>::deserialize(deserializer)? {
+            Saved::Unified(enabled) => enabled,
+            // Keep the feature enabled for anyone using either of the old switches.
+            Saved::Separate { intro, outro } => intro || outro,
+        },
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -260,6 +260,7 @@ impl App {
             PrefTab::General => self.preferences_draft.language = Language::Chinese,
             PrefTab::Video => {
                 self.preferences_draft.video = Default::default();
+                self.preferences_draft.video_skip_ai = Default::default();
                 let selected = self.preferences_draft.llm.selected.clone();
                 self.preferences_draft.llm = crate::settings::LlmSettings {
                     selected,

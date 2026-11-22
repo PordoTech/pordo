@@ -29,7 +29,7 @@ struct Prepared {
 
 struct Playing {
     path: String,
-    _source: bilibili::Source,
+    source: bilibili::Source,
 }
 
 #[derive(Default)]
@@ -136,6 +136,18 @@ impl App {
             active.playback.duration,
         ))
     }
+
+    pub(super) fn bilibili_skip_audio_source(&self) -> Option<PathBuf> {
+        let state = &self.online_video;
+        let active = state.active.as_ref()?;
+        if active.part != state.part && (state.resolve.is_some() || state.prepare.is_some()) {
+            return None;
+        }
+        let source = &state.playing.as_ref()?.source;
+        Some(PathBuf::from(
+            source.audio.as_ref().unwrap_or(&source.video),
+        ))
+    }
     pub(super) fn cancel_video_discovery(&mut self) {
         if self.workspace.page == workspace::Page::Playing
             && self.player.is_none()
@@ -209,7 +221,7 @@ impl App {
     fn toggle_creator_favorite(&mut self, creator: &Uploader) {
         if let Err(error) = self.library.toggle_creator(creator) {
             self.error = Some(error.to_string());
-        } else if self.settings.video.check_updates {
+        } else {
             self.queue_video_updates(false, None);
         }
     }
@@ -743,7 +755,7 @@ impl App {
                     self.title = title;
                     self.online_video.playing = Some(Playing {
                         path: path.clone(),
-                        _source: source,
+                        source,
                     });
                     self.online_video.active = Some(active);
                     self.online_video.resume_speed = speed;
@@ -804,18 +816,6 @@ impl App {
                     );
                 });
         });
-        preferences::form_row(
-            ui,
-            l.text("自动检查收藏 UP 主更新", "Check creator updates"),
-            l,
-            |ui| {
-                design::toggle(
-                    ui,
-                    &mut self.preferences_draft.video.check_updates,
-                    l.text("自动检查收藏 UP 主更新", "Check creator updates"),
-                );
-            },
-        );
         ui.separator();
         let mut signout = false;
         let mut login = false;
@@ -905,30 +905,33 @@ impl App {
             ui.label(&self.online_video.auth_status);
         }
         ui.separator();
-        preferences::form_row(
-            ui,
-            l.text("自动跳过片头", "Auto-skip intro"),
-            l,
-            |ui| {
-                design::toggle(
-                    ui,
-                    &mut self.preferences_draft.video.skip.intro,
-                    l.text("自动跳过片头", "Auto-skip intro"),
-                );
-            },
-        );
-        preferences::form_row(
-            ui,
-            l.text("自动跳过片尾", "Auto-skip outro"),
-            l,
-            |ui| {
-                design::toggle(
-                    ui,
-                    &mut self.preferences_draft.video.skip.outro,
-                    l.text("自动跳过片尾", "Auto-skip outro"),
-                );
-            },
-        );
+        let label = l.text("自动跳过片头片尾", "Auto-skip intro and outro");
+        preferences::form_row(ui, label, l, |ui| {
+            design::toggle(ui, &mut self.preferences_draft.video.skip, label);
+        });
+        let detection = &mut self.preferences_draft.video_skip_ai;
+        let label = l.text("缺少标记时用 AI 识别", "Use AI when markers are missing");
+        preferences::form_row(ui, label, l, |ui| {
+            design::toggle(ui, &mut detection.enabled, label).on_hover_text(l.text(
+                "仅向所选 AI 提供商发送片头、片尾各最多 5 分钟的音频",
+                "Sends up to five minutes of audio from each end to the selected AI provider",
+            ));
+        });
+        if detection.enabled {
+            preferences::form_row(
+                ui,
+                l.text("音频识别模型", "Audio analysis model"),
+                l,
+                |ui| {
+                    providers::model_selector(
+                        ui,
+                        &mut detection.selected,
+                        &self.preferences_draft.ai,
+                        l,
+                    );
+                },
+            );
+        }
     }
 
     pub(super) fn online_video_contents(&mut self, ui: &mut Ui) {

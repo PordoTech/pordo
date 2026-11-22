@@ -439,10 +439,9 @@ impl App {
             .filter(|r| r.favorite)
             .any(|r| !self.online_video.updates.local.contains_key(&key(r)));
         let startup = !self.online_video.updates.startup;
-        if self.settings.video.check_updates
-            && (startup
-                || new_subscription
-                || (entered && matches!(page, workspace::Page::Home | workspace::Page::Video)))
+        if startup
+            || new_subscription
+            || (entered && matches!(page, workspace::Page::Home | workspace::Page::Video))
         {
             self.online_video.updates.startup = true;
             self.queue_video_updates(false, None);

@@ -42,6 +42,10 @@ impl Config {
         )
         .map(|_| ())
     }
+    pub(crate) fn for_audio_analysis(connection: crate::ai::Connection) -> Result<Self> {
+        Self::from_connection(connection, &LlmSettings::default())
+    }
+
     fn from_connection(connection: crate::ai::Connection, overrides: &LlmSettings) -> Result<Self> {
         let defaults = LlmSettings::default();
         let pick = |value: &str, default: String| {
@@ -186,6 +190,46 @@ impl Client {
             Ordering::Relaxed,
         );
         let _active = InFlight(&self.in_flight);
+        let prompt = match mode {
+            Mode::Subtitles => subtitle_prompt(language, chunk.duration(), self.config.bilingual),
+            Mode::Lyrics => lyrics_prompt(chunk.duration()),
+        };
+        let mut body = self.audio_body(chunk, prompt, None).await?;
+        if let Some(effort) = &self.config.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+        tokio::select! {
+            result = self.request(body) => {
+                let content = result?;
+                parse_cues_mode(&content, chunk.start, chunk.duration(), mode == Mode::Subtitles && self.config.bilingual)
+                    .map_err(|e| anyhow::anyhow!("{}", format!("{e:#}").replace(&self.config.key, "[REDACTED]")))
+            },
+            _ = cancelled(cancel) => bail!("字幕生成已取消"),
+        }
+    }
+
+    pub(crate) async fn analyze_audio(
+        &self,
+        chunk: &Chunk,
+        prompt: String,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let body = self
+            .audio_body(chunk, prompt, Some(2 * 1024 * 1024))
+            .await?;
+        ensure!(!cancel.load(Ordering::Acquire), "Audio analysis cancelled");
+        tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(45), self.request_once(&body)) => result?,
+            _ = cancelled(cancel) => bail!("Audio analysis cancelled"),
+        }
+    }
+
+    async fn audio_body(
+        &self,
+        chunk: &Chunk,
+        prompt: String,
+        audio_limit: Option<usize>,
+    ) -> Result<Value> {
         let bytes = if self.config.audio_format == "mp3" {
             let owned = Chunk {
                 start: chunk.start,
@@ -208,23 +252,14 @@ impl Client {
                 },
             );
         }
-        let prompt = match mode {
-            Mode::Subtitles => subtitle_prompt(language, chunk.duration(), self.config.bilingual),
-            Mode::Lyrics => lyrics_prompt(chunk.duration()),
-        };
-        let mut body = json!({"model": self.config.model, "stream": true, "modalities": ["text"],
-            "messages": [{"role":"user", "content":[{"type":"text","text":prompt}, {"type":"input_audio","input_audio":{"data":data,"format":self.config.audio_format}}]}]});
-        if let Some(effort) = &self.config.reasoning_effort {
-            body["reasoning_effort"] = json!(effort);
-        }
-        tokio::select! {
-            result = self.request(body) => {
-                let content = result?;
-                parse_cues_mode(&content, chunk.start, chunk.duration(), mode == Mode::Subtitles && self.config.bilingual)
-                    .map_err(|e| anyhow::anyhow!("{}", format!("{e:#}").replace(&self.config.key, "[REDACTED]")))
-            },
-            _ = cancelled(cancel) => bail!("字幕生成已取消"),
-        }
+        ensure!(
+            audio_limit.is_none_or(|limit| data.len() <= limit),
+            "AI audio input exceeds its size limit"
+        );
+        Ok(
+            json!({"model": self.config.model, "stream": true, "modalities": ["text"],
+            "messages": [{"role":"user", "content":[{"type":"text","text":prompt}, {"type":"input_audio","input_audio":{"data":data,"format":self.config.audio_format}}]}]}),
+        )
     }
     async fn request(&self, body: Value) -> Result<String> {
         for attempt in 0..3 {

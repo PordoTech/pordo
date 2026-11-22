@@ -157,6 +157,11 @@ impl Playback {
     pub fn reset_pass(&mut self) {
         self.handled.fill(false);
     }
+    pub fn add(&mut self, segment: Segment) {
+        let index = self.segments.partition_point(|s| s.start <= segment.start);
+        self.segments.insert(index, segment);
+        self.handled.insert(index, false);
+    }
     pub fn manual_seek(&mut self, position: f64) {
         for (segment, handled) in self.segments.iter().zip(&mut self.handled) {
             if position >= segment.start && position < segment.end {
@@ -164,20 +169,15 @@ impl Playback {
             }
         }
     }
-    pub fn target(&mut self, position: f64, settings: &super::super::SkipSettings) -> Option<f64> {
+    pub fn target(&mut self, position: f64) -> Option<f64> {
         let mut target = None;
-        // Merge overlapping enabled intervals so duplicate/community submissions
+        // Merge overlapping intervals so duplicate/community submissions
         // cannot produce a chain of seeks through the same OP/ED.
         for (segment, handled) in self.segments.iter().zip(&mut self.handled) {
-            let enabled = match segment.kind {
-                Kind::Intro => settings.intro,
-                Kind::Outro => settings.outro,
-            };
-            if enabled && !*handled && position >= segment.start && position < segment.end {
+            if !*handled && position >= segment.start && position < segment.end {
                 *handled = true;
                 target = Some(target.map_or(segment.end, |end: f64| end.max(segment.end)));
-            } else if enabled
-                && !*handled
+            } else if !*handled
                 && target.is_some_and(|end| segment.start <= end && segment.end > position)
             {
                 *handled = true;
@@ -191,7 +191,7 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::video_sources::{Settings, SkipSettings};
+    use crate::video_sources::Settings;
     use serde_json::json;
 
     const BV: &str = "BV1GJ411x7h7";
@@ -251,7 +251,7 @@ mod tests {
         assert!(parse(b"{}", BV, 11, 300.0).is_err());
     }
     #[test]
-    fn independent_switches_manual_rewatch_overlap_and_eof_are_respected() {
+    fn manual_rewatch_overlap_and_eof_are_respected() {
         let mut playback = Playback::new(vec![
             Segment {
                 kind: Kind::Intro,
@@ -269,51 +269,40 @@ mod tests {
                 end: 300.0,
             },
         ]);
-        let intro = SkipSettings {
-            intro: true,
-            outro: false,
-        };
-        let both = SkipSettings {
-            intro: true,
-            outro: true,
-        };
-        assert_eq!(playback.target(15.0, &SkipSettings::default()), None);
-        assert_eq!(playback.target(9.0, &both), None);
-        assert_eq!(playback.target(10.0, &intro), Some(50.0));
-        assert_eq!(playback.target(15.0, &intro), None, "one seek per pass");
-        assert_eq!(playback.target(275.0, &intro), None);
-        assert_eq!(
-            playback.target(275.0, &both),
-            Some(300.0),
-            "ED may end at EOF"
-        );
+        assert_eq!(playback.target(9.0), None);
+        assert_eq!(playback.target(10.0), Some(50.0));
+        assert_eq!(playback.target(15.0), None, "one seek per pass");
+        assert_eq!(playback.target(275.0), Some(300.0), "ED may end at EOF");
         playback.reset_pass();
         playback.manual_seek(35.0);
         assert_eq!(
-            playback.target(36.0, &both),
+            playback.target(36.0),
             None,
             "manual seek keeps both overlapping OP markers watchable"
         );
-        assert_eq!(playback.target(275.0, &both), Some(300.0));
+        assert_eq!(playback.target(275.0), Some(300.0));
         playback.reset_pass();
         assert_eq!(
-            playback.target(10.0, &both),
+            playback.target(10.0),
             Some(50.0),
             "new playback pass skips again"
         );
     }
     #[test]
-    fn old_settings_default_to_disabled_and_skip_choices_round_trip() {
-        let mut settings: Settings = serde_json::from_str(r#"{"source":"bilibili"}"#).unwrap();
-        assert_eq!(settings.skip, SkipSettings::default());
-        settings.skip = SkipSettings {
-            intro: true,
-            outro: false,
-        };
-        assert_eq!(
-            serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap()).unwrap(),
-            settings
-        );
+    fn unified_skip_defaults_on_and_loads_existing_settings() {
+        for (json, expected) in [
+            (r#"{"source":"bilibili","check_updates":false}"#, true),
+            (r#"{"skip":{"intro":true,"outro":false}}"#, true),
+            (r#"{"skip":{"intro":false,"outro":true}}"#, true),
+            (r#"{"skip":{"intro":false,"outro":false}}"#, false),
+            (r#"{"skip":false}"#, false),
+        ] {
+            let settings: Settings = serde_json::from_str(json).unwrap();
+            assert_eq!(settings.skip, expected);
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert_eq!(saved["skip"], expected);
+            assert!(saved.get("check_updates").is_none());
+        }
     }
     #[tokio::test]
     async fn lookup_uses_hash_prefix_identity_headers_and_no_cookies_with_soft_404() {

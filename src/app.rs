@@ -525,6 +525,9 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.should_close(ctx) {
+            return;
+        }
         self.comic.poll(ctx, &self.settings);
         self.poll_online_music(ctx);
         self.poll_online_video(ctx);
@@ -615,7 +618,7 @@ impl eframe::App for App {
                     }
                     Event::Ended => {
                         self.playback_warning = None;
-                        self.video_skip.playback.reset_pass();
+                        self.video_skip.reset_pass();
                         advance = true;
                     }
                     Event::SeekCompleted { id, .. } => {
@@ -675,13 +678,11 @@ impl eframe::App for App {
 
     fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
-        self.updater.poll();
-        self.poll_cloud(&ctx);
-        self.poll_video_updates(&ctx);
-        self.poll_cloud_close(&ctx);
-        if self.cloud_closing() {
-            root.disable();
+        if self.should_close(&ctx) {
+            return;
         }
+        self.updater.poll();
+        self.poll_video_updates(&ctx);
         self.fullscreen = window::fullscreen_shortcuts(&ctx);
         if self.updater.dialog_visible {
             ctx.input_mut(|i| {
@@ -866,6 +867,7 @@ impl eframe::App for App {
         if self.workspace.page != workspace::Page::Playing || self.settings_open {
             window::video_cursor(&ctx, false);
             self.workspace_ui(root);
+            self.poll_cloud(&ctx);
             return;
         }
 
@@ -1027,6 +1029,9 @@ impl eframe::App for App {
             self.music_view(root, screen, playback_rect, &mut act);
         }
         self.window_frame(root, a > 0.02);
+        if self.should_close(&ctx) {
+            return;
+        }
         window::video_cursor(
             &ctx,
             self.fullscreen
@@ -1142,6 +1147,7 @@ impl eframe::App for App {
         self.online_music_window(&ctx);
         self.history_notice(&ctx);
         self.update_dialog(&ctx);
+        self.poll_cloud(&ctx);
         self.magnet_dialog(&ctx);
         if self.loading && self.player.is_none() && self.workspace.page == workspace::Page::Playing
         {
@@ -1287,6 +1293,11 @@ impl eframe::App for App {
             0.03
         } else {
             0.25
+        };
+        let delay = if playing && self.danmaku.has_scrolling() {
+            delay.min(1.0 / 60.0)
+        } else {
+            delay
         };
         ctx.request_repaint_after(Duration::from_secs_f64(delay));
     }
@@ -1878,7 +1889,7 @@ impl App {
 
 type FontFace = (&'static [u8], u32);
 
-fn load_font_face(candidates: &[(&str, u32)]) -> Option<FontFace> {
+fn load_font_face(candidates: &[(impl AsRef<std::path::Path>, u32)]) -> Option<FontFace> {
     candidates.iter().find_map(|(path, index)| {
         let bytes = std::fs::read(path).ok()?;
         Some((&*Box::leak(bytes.into_boxed_slice()), *index))
@@ -1896,6 +1907,8 @@ pub(super) fn setup_fonts(ctx: &egui::Context) {
     static WESTERN_STRONG_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
     static CJK_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
     static CJK_STRONG_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
+    static KOREAN_FONTS: std::sync::OnceLock<(Option<FontFace>, Option<FontFace>)> =
+        std::sync::OnceLock::new();
     static SYMBOL_FONT: std::sync::OnceLock<Option<FontFace>> = std::sync::OnceLock::new();
 
     const WESTERN_CANDIDATES: &[(&str, u32)] = &[
@@ -1938,6 +1951,22 @@ pub(super) fn setup_fonts(ctx: &egui::Context) {
     let western_strong = (*WESTERN_STRONG_FONT
         .get_or_init(|| load_font_face(WESTERN_STRONG_CANDIDATES)))
     .or(western);
+    let (korean, korean_strong) = *KOREAN_FONTS.get_or_init(|| {
+        // Apple SD Gothic Neo stores the regular and bold faces in one collection.
+        if let Some((bytes, _)) =
+            load_font_face(&[("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0)])
+        {
+            return (Some((bytes, 0)), Some((bytes, 6)));
+        }
+        let windows_fonts = std::env::var_os("SystemRoot")
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+            .join("Fonts");
+        let regular = load_font_face(&[(windows_fonts.join("malgun.ttf"), 0)]).or_else(|| {
+            load_font_face(&[("/System/Library/Fonts/Supplemental/AppleGothic.ttf", 0)])
+        });
+        let bold = load_font_face(&[(windows_fonts.join("malgunbd.ttf"), 0)]).or(regular);
+        (regular, bold)
+    });
     let symbols = *SYMBOL_FONT.get_or_init(|| load_font_face(SYMBOL_CANDIDATES));
     let strong = design::strong_family();
 
@@ -1987,6 +2016,29 @@ pub(super) fn setup_fonts(ctx: &egui::Context) {
             }],
         });
     }
+    if let Some(face) = korean {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "korean".into(),
+            data: font_data(face),
+            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
+                .into_iter()
+                .map(|family| egui::epaint::text::InsertFontFamily {
+                    family,
+                    priority: egui::epaint::text::FontPriority::Lowest,
+                })
+                .collect(),
+        });
+    }
+    if let Some(face) = korean_strong {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "korean-strong".into(),
+            data: font_data(face),
+            families: vec![egui::epaint::text::InsertFontFamily {
+                family: strong.clone(),
+                priority: egui::epaint::text::FontPriority::Lowest,
+            }],
+        });
+    }
     if let Some(face) = symbols {
         ctx.add_font(egui::epaint::text::FontInsert {
             name: "symbols".into(),
@@ -2019,4 +2071,30 @@ fn fmt_time(secs: f64) -> String {
     } else {
         format!("{m:02}:{s:02}")
     }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn desktop_fonts_cover_korean() {
+    let ctx = egui::Context::default();
+    setup_fonts(&ctx);
+
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        for family in [
+            egui::FontFamily::Proportional,
+            egui::FontFamily::Monospace,
+            design::strong_family(),
+        ] {
+            let font = egui::FontId::new(16.0, family);
+            ui.fonts_mut(|fonts| {
+                for character in "한글자막음악ㄱ똠힣".chars() {
+                    assert!(
+                        fonts.glyph_width(&font, character) > 0.0,
+                        "{font:?} is missing {character:?}"
+                    );
+                }
+            });
+        }
+    });
+    output.textures_delta.clear();
 }
