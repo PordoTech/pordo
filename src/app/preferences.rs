@@ -22,20 +22,6 @@ impl App {
                     Err(error) => l.error(&error.to_string()),
                 };
             }
-            if design::control(
-                ui,
-                l.text("重新填写密钥", "Re-enter keys"),
-                None,
-                design::Control::Outline,
-                0.0,
-            )
-            .clicked()
-            {
-                self.config_message = match self.preferences_draft.reenter_credentials() {
-                    Ok(()) => l.text("请补充缺失的密钥和同步密码，已有凭据已保留", "Fill in missing keys and sync passwords; existing credentials were preserved").into(),
-                    Err(error) => l.error(&error.to_string()),
-                };
-            }
         }
     }
 
@@ -161,7 +147,7 @@ impl App {
                             PrefTab::Video => self.preferences_video(ui),
                             PrefTab::Comics => self.preferences_comics(ui),
                             PrefTab::Cloud => self.preferences_cloud(ui),
-                            PrefTab::About => self.about(ui, &ui.ctx().clone()),
+                            PrefTab::About => self.about(ui),
                         }
                     });
             });

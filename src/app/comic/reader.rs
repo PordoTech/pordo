@@ -245,13 +245,6 @@ impl State {
                         reader.zoom = if reader.zoom > 1.1 { 1.0 } else { 1.5 };
                         reader.restore = true;
                     }
-                    if index == count - 1
-                        && rect.max.y <= viewport.max.y + 2.0
-                        && reader.assets.contains_key(&index)
-                    {
-                        reader.completed = true;
-                        reader.dirty = true;
-                    }
                 }
                 closest
             });

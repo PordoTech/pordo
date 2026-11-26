@@ -2,7 +2,7 @@ use super::*;
 use crate::updater::{self, Status};
 
 impl App {
-    pub(super) fn about(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+    pub(super) fn about(&mut self, ui: &mut Ui) {
         let language = self.settings.language;
         ui.horizontal(|ui| {
             let (logo, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
@@ -18,7 +18,7 @@ impl App {
         });
         ui.add_space(4.0);
         ui.separator();
-        if !cfg!(windows) {
+        if !updater::supported() {
             ui.hyperlink_to(
                 language.text("下载更新", "Download updates"),
                 format!("{}/releases/latest", updater::REPOSITORY),
@@ -52,15 +52,16 @@ impl App {
                     "Download verified and ready to install",
                 )
                 .to_owned(),
+            Status::Installing => language
+                .text("正在准备安装…", "Preparing installation…")
+                .to_owned(),
             Status::Downloading { received, total } => format!(
                 "{} {:.1} / {:.1} MiB",
                 language.text("正在下载", "Downloading"),
                 *received as f64 / 1048576.0,
                 *total as f64 / 1048576.0
             ),
-            Status::Failed(error) => {
-                format!("{}: {error}", language.text("更新未完成", "Update failed"))
-            }
+            Status::Failed(error) => self.update_error(language, error),
         };
         if !status.is_empty() {
             preferences::form_row(ui, "", language, |ui| {
@@ -74,6 +75,7 @@ impl App {
                         .show_percentage(),
                 );
             });
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
         preferences::form_row(ui, "", language, |ui| {
             let busy = self.updater.busy();
@@ -96,9 +98,8 @@ impl App {
                 if self.updater.can_install() {
                     if workspace::primary(ui, language.text("安装并重启", "Install and restart"))
                         .clicked()
-                        && self.updater.install().is_ok()
                     {
-                        self.request_close(ctx);
+                        self.updater.install();
                     }
                 } else if workspace::primary(ui, language.text("下载更新", "Download update"))
                     .clicked()
@@ -118,6 +119,12 @@ impl App {
                 self.updater.dialog_visible = true;
             }
         });
+        if cfg!(target_os = "macos") {
+            ui.hyperlink_to(
+                language.text("手动下载", "Download manually"),
+                format!("{}/releases/latest", updater::REPOSITORY),
+            );
+        }
         if !self.subtitles.is_empty() && matches!(self.updater.status, Status::Ready) {
             ui.small(language.text(
                 "重启前请导出需要保留的字幕",
@@ -138,6 +145,27 @@ impl App {
     }
 
     pub(super) fn update_dialog(&mut self, ctx: &egui::Context) {
+        if self.updater.rollback_notice {
+            let l = self.settings.language;
+            let notice = egui::Modal::new(Id::new("update-rollback"))
+                .frame(design::modal_frame())
+                .show(ctx, |ui| {
+                    ui.label(l.text(
+                        "更新未完成，已重新打开原版本。",
+                        "The update could not finish. The previous version has reopened.",
+                    ));
+                    ui.add_space(8.0);
+                    ui.hyperlink_to(
+                        l.text("手动下载", "Download manually"),
+                        format!("{}/releases/latest", updater::REPOSITORY),
+                    );
+                    workspace::primary(ui, l.text("确定", "OK")).clicked()
+                });
+            if notice.inner || notice.should_close() {
+                self.updater.rollback_notice = false;
+            }
+            return;
+        }
         if !self.updater.dialog_visible {
             return;
         }
@@ -200,7 +228,19 @@ impl App {
                         ctx.request_repaint_after(Duration::from_millis(200));
                     }
                     Status::Failed(error) => {
-                        ui.colored_label(Color32::LIGHT_RED, l.error(error));
+                        ui.colored_label(Color32::LIGHT_RED, self.update_error(l, error));
+                        if self.updater.install_location_error() {
+                            ui.hyperlink_to(
+                                l.text("手动下载", "Download manually"),
+                                format!("{}/releases/latest", updater::REPOSITORY),
+                            );
+                        }
+                    }
+                    Status::Installing => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new().size(14.0));
+                            ui.small(l.text("正在准备安装…", "Preparing installation…"));
+                        });
                     }
                     _ => {}
                 }
@@ -242,10 +282,25 @@ impl App {
         if download {
             self.updater.download();
         }
-        if install && self.updater.install().is_ok() {
-            self.persist_queue();
-            self.request_close(ctx);
+        if install {
+            self.updater.install();
         }
+    }
+
+    fn update_error(&self, language: Language, error: &str) -> String {
+        if self.updater.install_location_error() {
+            return language
+                .text(
+                    "请将 Pordo 移到可写的应用程序目录后重新打开。",
+                    "Move Pordo to a writable Applications folder and reopen it.",
+                )
+                .into();
+        }
+        format!(
+            "{}: {}",
+            language.text("更新未完成", "Update failed"),
+            language.error(error)
+        )
     }
 }
 

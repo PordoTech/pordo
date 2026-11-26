@@ -14,14 +14,26 @@ struct MissingMarkers {
 }
 
 #[derive(Default)]
+enum AiStatus {
+    #[default]
+    Idle,
+    Configuration,
+    Analyzing,
+    NoMatch,
+    Found,
+    Failed(analysis::Failure),
+}
+
+#[derive(Default)]
 pub(super) struct State {
     key: Option<(String, u64)>,
     job: Option<Job<Vec<Segment>>>,
     pub(super) playback: segments::Playback,
-    community_ready: bool,
+    community_finished: bool,
     ai_request: Option<(PathBuf, crate::ai::ModelRef, MissingMarkers)>,
     ai_job: Option<analysis::Analysis>,
     ai_playback: segments::Playback,
+    ai_status: AiStatus,
     manual_position: Option<f64>,
 }
 impl State {
@@ -61,9 +73,9 @@ impl State {
         }
         if let Some(result) = self.job.as_ref().and_then(Job::poll) {
             self.job = None;
+            self.community_finished = true;
             match result {
                 Ok(segments) => {
-                    self.community_ready = true;
                     self.playback = segments::Playback::new(segments);
                     if let Some(position) = self.manual_position {
                         self.playback.manual_seek(position);
@@ -85,15 +97,12 @@ impl State {
         duration: f64,
     ) {
         let ai = &settings.video_skip_ai;
-        let missing = MissingMarkers {
-            intro: self.playback.segments.iter().all(|s| s.kind != Kind::Intro),
-            outro: self.playback.segments.iter().all(|s| s.kind != Kind::Outro),
-        };
+        let missing = self.missing_markers();
         let request = source
             .filter(|_| {
                 ai.enabled
                     && settings.video.skip
-                    && self.community_ready
+                    && self.community_finished
                     && (missing.intro || missing.outro)
             })
             .map(|source| (source, ai.selected.clone(), missing));
@@ -101,20 +110,28 @@ impl State {
             self.ai_job = None;
             self.ai_playback = Default::default();
             self.ai_request = None;
+            self.ai_status = AiStatus::Idle;
             if let Some((source, selected, wanted)) = &request
                 && let Some(key) = &self.key
-                && let Ok(connection) = settings.ai.resolve(selected)
             {
-                self.ai_job = Some(analysis::Analysis::start(
-                    ctx.clone(),
-                    source.clone(),
-                    key,
-                    duration,
-                    *wanted,
-                    connection,
-                ));
-                self.ai_request = request;
+                match settings.ai.resolve(selected) {
+                    Ok(connection) => {
+                        self.ai_job = Some(analysis::Analysis::start(
+                            ctx.clone(),
+                            source.clone(),
+                            key,
+                            duration,
+                            *wanted,
+                            connection,
+                        ));
+                        self.ai_request = request;
+                        self.ai_status = AiStatus::Analyzing;
+                    }
+                    Err(_) => self.ai_status = AiStatus::Configuration,
+                }
             }
+        } else if request.is_none() {
+            self.ai_status = AiStatus::Idle;
         }
         if let Some(job) = &self.ai_job {
             let done = job.job.poll();
@@ -138,14 +155,58 @@ impl State {
                 }
             }
             if let Some(result) = done {
-                if result.is_err() {
-                    eprintln!("Bilibili AI audio analysis unavailable");
-                }
+                self.ai_status = match result {
+                    Ok(()) if self.ai_playback.segments.is_empty() => AiStatus::NoMatch,
+                    Ok(()) => AiStatus::Found,
+                    Err(error) => AiStatus::Failed(
+                        error
+                            .downcast_ref::<analysis::Failure>()
+                            .copied()
+                            .unwrap_or(analysis::Failure::Service),
+                    ),
+                };
                 self.ai_job = None;
             } else {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
+    }
+
+    fn missing_markers(&self) -> MissingMarkers {
+        MissingMarkers {
+            intro: self.playback.segments.iter().all(|s| s.kind != Kind::Intro),
+            outro: self.playback.segments.iter().all(|s| s.kind != Kind::Outro),
+        }
+    }
+
+    pub(super) fn ai_status_label(&self, language: Language) -> Option<&'static str> {
+        let missing = self.missing_markers();
+        if self.community_finished && !missing.intro && !missing.outro {
+            return Some(language.text("正在使用社区标记", "Using community markers"));
+        }
+        Some(match self.ai_status {
+            AiStatus::Idle => return None,
+            AiStatus::Configuration => language.text(
+                "请检查音频识别模型和 API Key",
+                "Check the audio analysis model and API key",
+            ),
+            AiStatus::Analyzing => language.text("正在识别片头片尾…", "Detecting intro and outro…"),
+            AiStatus::NoMatch => language.text(
+                "AI 未找到明确的可跳过片段",
+                "AI found no clear segment to skip",
+            ),
+            AiStatus::Found => language.text("已添加 AI 标记", "AI markers added"),
+            AiStatus::Failed(analysis::Failure::Audio) => language.text(
+                "无法提取识别所需的音频",
+                "Could not extract audio for analysis",
+            ),
+            AiStatus::Failed(analysis::Failure::Service) => {
+                language.text("音频识别请求失败", "Audio analysis request failed")
+            }
+            AiStatus::Failed(analysis::Failure::Response) => {
+                language.text("音频识别结果格式无效", "Invalid audio analysis response")
+            }
+        })
     }
 
     pub(super) fn ai_marker_at(&self, position: f64) -> Option<Kind> {
@@ -169,7 +230,6 @@ impl App {
                 .as_ref()
                 .filter(|p| {
                     self.settings.video_skip_ai.enabled
-                        && self.workspace.page == workspace::Page::Playing
                         && !self.loading
                         && p.duration() > 0.0
                         && p.duration().is_finite()
@@ -253,6 +313,41 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_community_lookup_unblocks_the_configured_ai_fallback() {
+        let ctx = egui::Context::default();
+        let identity = ("BV1GJ411x7h7".into(), 11);
+        let mut state = State::seeded(identity, vec![]);
+        state.job = Some(Job::spawn(|_| async {
+            anyhow::bail!("lookup unavailable")
+        }));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.job.is_some() && Instant::now() < deadline {
+            state.poll(&ctx, Some(("BV1GJ411x7h7".into(), 11, 300.0)));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(state.community_finished);
+        let mut settings = Settings::default();
+        settings.video_skip_ai.enabled = true;
+        settings.video_skip_ai.selected = crate::ai::ModelRef {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        };
+        settings.ai.providers.push(crate::ai::Provider {
+            id: "fixture".into(),
+            base_url: "https://fixture.invalid/v1".into(),
+            models: vec!["fixture".into()],
+            api_key: "fixture".into(),
+            ..Default::default()
+        });
+        let source = Settings::queue_path().with_file_name("nonexistent-fallback-fixture.m4a");
+        state.poll_ai(&ctx, &settings, Some(source), 300.0);
+        assert!(
+            state.ai_request.is_some(),
+            "the lookup error must not suppress AI"
+        );
+    }
+
     #[test]
     fn late_markers_preserve_manual_rewatch_and_leaving_cancels_pending_data() {
         let ctx = egui::Context::default();

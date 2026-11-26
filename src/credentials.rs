@@ -106,8 +106,6 @@ impl LegacyVault {
 mod macos {
     use super::*;
     use security_framework::passwords::{self, PasswordOptions};
-    // Security.framework's errSecItemNotFound.
-    const ITEM_NOT_FOUND: i32 = -25300;
 
     fn options(target: &str) -> PasswordOptions {
         // Published Keychain service: changing this would hide existing credentials.
@@ -118,18 +116,14 @@ mod macos {
     impl LegacyVault {
         pub(super) fn get(&self, target: &str) -> Result<Option<String>> {
             // Migration must never display a Keychain authorization dialog.
-            let _interaction =
+            let Ok(_interaction) =
                 security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
-                    .context("无法检查旧凭据 / Cannot inspect legacy credentials")?;
-            match passwords::generic_password(options(target)) {
-                Ok(bytes) => String::from_utf8(bytes)
-                    .map(Some)
-                    .context("已保存的凭据格式无效 / Invalid saved credential"),
-                Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
-                Err(_) => anyhow::bail!(
-                    "旧密钥仍保存在钥匙串，请在设置中选择重新填写密钥 / Legacy keys remain in Keychain; choose Re-enter keys in Settings"
-                ),
-            }
+            else {
+                return Ok(None);
+            };
+            Ok(passwords::generic_password(options(target))
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok()))
         }
     }
 }

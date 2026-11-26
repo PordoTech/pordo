@@ -72,14 +72,14 @@ fn file_credentials_survive_restart_clear_explicitly_and_restrict_permissions() 
         reopened.get("sync/password").unwrap().as_deref(),
         Some("test-only-password")
     );
-    reopened
-        .finish_migration(&["sync/password".into(), "missing-legacy-key".into()])
-        .unwrap();
     assert_eq!(
         reopened.get("sync/password").unwrap().as_deref(),
         Some("test-only-password")
     );
     assert!(reopened.get("missing-legacy-key").unwrap().is_none());
+    let stored = reopened.stored_targets().unwrap();
+    assert!(stored.contains("api/provider"));
+    assert!(!stored.contains("missing-legacy-key"));
     assert!(
         transaction(
             &reopened,

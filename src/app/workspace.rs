@@ -183,6 +183,9 @@ impl App {
                 {
                     self.navigate(Page::Music);
                 }
+                if self.loading {
+                    design::loading_status(ui, language.text("加载中...", "Loading..."));
+                }
             });
             let labels = [
                 language.text("歌词", "Lyrics"),
@@ -304,17 +307,6 @@ impl App {
         }
         if footer_h > 0.0 {
             self.mini_transport(root, screen, &mut act);
-        }
-        if self.loading && !reader {
-            let mut ui = child(
-                root,
-                "opening-media",
-                Rect::from_min_size(content.min + vec2(28.0, 64.0), vec2(260.0, 30.0)),
-            );
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.small(language.text("正在打开媒体…", "Opening media…"));
-            });
         }
         let warning = self.error.is_none();
         if let Some(error) = self

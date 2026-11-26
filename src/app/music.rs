@@ -181,23 +181,28 @@ impl App {
         let scroll = design::scroll().auto_shrink([false, false]).show(ui, |ui| {
             for (index, item) in self.queue.items.iter().enumerate() {
                 let current = self.queue.current == Some(index);
-                let path = match &item.source {
-                    Source::File(path) => Some(path.clone()),
-                    Source::Online(song) => self
-                        .library
+                let song = match &item.source {
+                    Source::Online(song) => Some(song),
+                    _ => None,
+                };
+                let record = song.and_then(|song| {
+                    let key = song.key();
+                    self.library
                         .records
                         .iter()
-                        .find(|r| r.online.as_ref().is_some_and(|s| s.key() == song.key()))
-                        .map(|r| r.path.clone()),
+                        .find(|r| r.online.as_ref().is_some_and(|s| s.key() == key))
+                });
+                let path = match &item.source {
+                    Source::File(path) => Some(path.as_str()),
+                    Source::Online(_) => record.map(|r| r.path.as_str()),
                     Source::Torrent(_) => None,
                 };
-                if let Some(path) = &path
+                if let Some(path) = path
                     && !path.starts_with("online://")
                 {
                     self.metadata_cache.request(path, &self.metadata_requests);
                 }
                 let metadata = path
-                    .as_ref()
                     .and_then(|path| self.metadata_cache.get(path))
                     .and_then(|value| value.as_ref())
                     .cloned();
@@ -205,27 +210,27 @@ impl App {
                     .as_ref()
                     .and_then(|info| info.title.as_deref())
                     .unwrap_or(&item.title);
-                let failure = match &item.source {
-                    Source::Online(song) => self.online_music.errors.get(&song.key()),
-                    _ => None,
-                };
-                let detail = metadata
-                    .as_ref()
-                    .map(|info| {
-                        [info.artist.as_deref(), info.album.as_deref()]
-                            .into_iter()
-                            .flatten()
-                            .collect::<Vec<_>>()
-                            .join(" · ")
-                    })
-                    .unwrap_or_else(|| match &item.source {
-                        Source::Online(song) => [song.artist.as_str(), song.album.as_str()]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .join(" · "),
-                        _ => String::new(),
-                    });
+                let failure = song.and_then(|song| self.online_music.errors.get(&song.key()));
+                let detail = [
+                    [
+                        metadata.as_ref().and_then(|info| info.artist.as_deref()),
+                        record.map(|r| r.artist.as_str()),
+                        song.map(|song| song.artist.as_str()),
+                    ],
+                    [
+                        metadata.as_ref().and_then(|info| info.album.as_deref()),
+                        record.map(|r| r.album.as_str()),
+                        song.map(|song| song.album.as_str()),
+                    ],
+                ]
+                .into_iter()
+                .filter_map(|tags| {
+                    tags.into_iter()
+                        .flatten()
+                        .find(|tag| !tag.trim().is_empty())
+                })
+                .collect::<Vec<_>>()
+                .join(" · ");
                 let detail = failure.map_or(detail, |error| {
                     format!(
                         "{}: {error}",
@@ -262,7 +267,7 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
                                 let mut tex = None;
-                                if let Some(path) = &path
+                                if let Some(path) = path
                                     && let Some(art) =
                                         metadata.as_ref().and_then(|info| info.artwork.as_ref())
                                 {
@@ -270,7 +275,7 @@ impl App {
                                     let art = art.clone();
                                     tex = Some(
                                         self.art_textures
-                                            .entry(path.clone())
+                                            .entry(path.to_owned())
                                             .or_insert_with(|| {
                                                 ctx.load_texture(
                                                     format!("queue-art-{index}"),
@@ -360,7 +365,7 @@ impl App {
                                 .response
                                 .on_hover_text(format!(
                                     "{title}\n{detail}\n{}\n{}",
-                                    path.as_deref().unwrap_or(&item.title),
+                                    path.unwrap_or(&item.title),
                                     language.text("长按拖动排序", "Hold to reorder")
                                 ));
                                 if icon_button(ui, 22.0, 1.0, draw_trash)

@@ -4,9 +4,9 @@
 
 Get the package for your platform from [Releases](https://github.com/PordoTech/pordo/releases). Windows offers an installer and portable ZIP. macOS 15+ offers separate Apple Silicon and Intel DMG/ZIP packages; move `Pordo.app` to Applications. When upgrading from `replayer.app`, quit the old app and remove its app bundle after installing Pordo; existing settings are kept.
 
-Windows updates can be checked, downloaded and installed from **Settings → About**. On macOS, use the Releases link. Export generated subtitles before restarting.
+Check for, download, and install updates on Windows and macOS in **Settings → About**. On macOS, install Pordo in a writable Applications folder before updating. If the new version fails to start, Pordo reopens the previous version. Older macOS versions that only offer a Releases link need one manual update. Export generated subtitles before restarting.
 
-Desktop service credentials are saved in a separate local plaintext `credentials.json` file, without system authorization dialogs; Android protects its local credentials with Android KeyStore. Existing desktop credentials migrate when they can be read without a prompt. If macOS requires authorization, the original Keychain entries remain intact; choose **Re-enter keys** in Settings to enter them into the local file instead. Local playback and comic reading do not require an AI account.
+Desktop service credentials are saved in a separate local plaintext `credentials.json` file, without system authorization dialogs. Android protects its local credentials with Android KeyStore. Existing desktop credentials migrate when they can be read without a prompt. Enter any missing credentials directly in the corresponding Settings fields. Local playback and comic reading do not require an AI account.
 
 The repository moved to `PordoTech/pordo`. Windows clients through v0.5.1 still validate installer URLs against the previous repository. Install the first newer version manually from Releases once it is available; later clients use the new location.
 
@@ -77,13 +77,13 @@ AI subtitles can use audio already present in the torrent cache. Missing audio m
 
 ## Comics
 
-Search MangaYun or Komiic, open a title and choose a chapter. Sources remain separate even when titles match. Add books to your bookshelf, check updates and resume from history. Komiic chapters can be filtered by chapter/volume type.
+Search MangaYun or Komiic, open a title and choose a chapter. Sources remain separate even when titles match. Add books to your bookshelf, check updates and resume from history. Komiic catalogs have tabs for all entries, individual chapters, and volumes.
 
 Favorite updates are checked at startup and when returning home, at least 15 minutes apart. Komiic checks up to 50 update summaries in one request, shows the latest chapter/volume and keeps an update dot without downloading directories or images. Opening a title's details fetches its directory and resolves exact unread chapter counts. MangaYun uses directory checks with at most four background requests overall, two per upstream source and 500 ms between request starts for each source. Each background request has a 20-second limit; errors leave cached data available. Automatic checks revisit completed titles after a day and failed titles after an hour. Manual refresh bypasses those intervals.
 
 Choose vertical scrolling, left-to-right or right-to-left pages. Zoom, page position and reading progress are saved. The chapter button opens the chapter list; the page slider and previous/next controls navigate within the book. A new favorite starts with the existing chapter list as its baseline; later unread additions produce update indicators. Each favorite comic remembers its own ascending or descending detail-directory order on this device. The default is ascending; this display preference does not change previous/next chapter navigation.
 
-Finishing the latest chapter or volume dismisses that comic's current update notice, even if earlier chapters remain unread. Earlier chapters keep their actual read/unread status. New chapters make the comic appear in Updates again. The dismissal is saved and follows reading-progress cloud sync.
+Opening a chapter or volume marks it as read. Opening the latest entry dismisses that comic's current update notice, even if earlier chapters remain unread. New chapters make the comic appear in Updates again. The dismissal is saved and follows reading-progress cloud sync.
 
 Original pages and covers are cached. Clearing these caches in Settings preserves translations, favorites and history. Previously cached pages may remain readable when a source is unavailable or its image quota is exhausted. Some upstream sources require adapter updates or are unsupported.
 

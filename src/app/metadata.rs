@@ -39,8 +39,8 @@ impl Cache {
         }
     }
 
-    pub fn playback(&mut self, path: String, info: Arc<Info>) {
-        self.merge(path, Some(info));
+    pub fn playback(&mut self, path: String, info: Arc<Info>) -> Arc<Info> {
+        self.merge(path, Some(info)).as_ref().unwrap().clone()
     }
 
     pub fn complete(&mut self, path: String, info: Option<Arc<Info>>) {
@@ -48,17 +48,27 @@ impl Cache {
         self.merge(path, info);
     }
 
-    fn merge(&mut self, path: String, mut info: Option<Arc<Info>>) {
-        if let Some(Some(previous)) = self.entries.get(&path) {
-            if let Some(info) = &mut info {
-                if info.artwork.is_none() && previous.artwork.is_some() {
-                    Arc::make_mut(info).artwork = previous.artwork.clone();
+    fn merge(&mut self, path: String, info: Option<Arc<Info>>) -> &Option<Arc<Info>> {
+        let cached = self.entries.entry(path).or_default();
+        if let Some(mut info) = info {
+            if let Some(previous) = cached.as_ref() {
+                let info = Arc::make_mut(&mut info);
+                for (tag, known) in [
+                    (&mut info.title, &previous.title),
+                    (&mut info.artist, &previous.artist),
+                    (&mut info.album, &previous.album),
+                ] {
+                    if tag.as_deref().is_none_or(|text| text.trim().is_empty()) {
+                        tag.clone_from(known);
+                    }
                 }
-            } else {
-                return;
+                if info.artwork.is_none() {
+                    info.artwork.clone_from(&previous.artwork);
+                }
             }
+            *cached = Some(info);
         }
-        self.entries.insert(path, info);
+        cached
     }
 }
 
@@ -66,6 +76,50 @@ impl Cache {
 mod tests {
     use super::*;
     use crate::media::Artwork;
+
+    #[test]
+    fn partial_playback_and_artwork_results_preserve_known_music_tags() {
+        let mut cache = Cache::default();
+        let path = "online://fixture:42";
+        let tags = Info {
+            kind: Kind::Music,
+            title: Some("Track".into()),
+            artist: Some("Artist".into()),
+            album: Some("Album".into()),
+            artwork: None,
+        };
+        cache.playback(path.into(), Arc::new(tags));
+        let cover = Arc::new(Artwork {
+            width: 1,
+            height: 1,
+            rgba: vec![50, 100, 150, 255],
+        });
+        cache.complete(
+            path.into(),
+            Some(Arc::new(Info {
+                kind: Kind::Music,
+                title: None,
+                artist: None,
+                album: None,
+                artwork: Some(cover),
+            })),
+        );
+        cache.playback(
+            path.into(),
+            Arc::new(Info {
+                kind: Kind::Music,
+                title: None,
+                artist: Some(" ".into()),
+                album: Some("Updated album".into()),
+                artwork: None,
+            }),
+        );
+        let current = cache.get(path).unwrap().as_ref().unwrap();
+        assert_eq!(current.title.as_deref(), Some("Track"));
+        assert_eq!(current.artist.as_deref(), Some("Artist"));
+        assert_eq!(current.album.as_deref(), Some("Updated album"));
+        assert!(current.artwork.is_some());
+    }
 
     fn video(cover: bool) -> Arc<Info> {
         Arc::new(Info {

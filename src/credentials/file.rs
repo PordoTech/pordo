@@ -2,7 +2,7 @@ use super::{LegacyVault, Result, Vault};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::PathBuf,
@@ -107,13 +107,8 @@ impl FileVault {
         }
         Ok(value)
     }
-    pub(crate) fn finish_migration(&self, targets: &[String]) -> Result<()> {
-        self.edit(|data| {
-            for target in targets {
-                data.entries.entry(target.clone()).or_insert(None);
-            }
-            Ok(((), true))
-        })
+    pub(crate) fn stored_targets(&self) -> Result<BTreeSet<String>> {
+        self.edit(|data| Ok((data.entries.keys().cloned().collect(), false)))
     }
 }
 impl Vault for FileVault {
@@ -127,8 +122,12 @@ impl Vault for FileVault {
             } else {
                 None
             };
-            data.entries.insert(target.into(), value.clone());
-            Ok((value, true))
+            // A missing read isn't a deletion. Only store a value we could import.
+            let imported = value.is_some();
+            if imported {
+                data.entries.insert(target.into(), value.clone());
+            }
+            Ok((value, imported))
         })
     }
     fn set(&self, target: &str, value: Option<&str>) -> Result<()> {

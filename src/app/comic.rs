@@ -178,7 +178,6 @@ struct Reader {
     sidebar_follow: bool,
     restore: bool,
     dirty: bool,
-    completed: bool,
     assets: HashMap<usize, Asset>,
     visible: Vec<usize>,
     jobs: HashMap<usize, PageJob>,
@@ -591,9 +590,6 @@ impl State {
         entry.last_read = domain::now();
         entry.mode = Some(reader.mode);
         entry.zoom = reader.zoom;
-        if reader.completed {
-            entry.mark_read(reader.chapter.key());
-        }
         match library.save(entry) {
             Ok(()) => {
                 reader.dirty = false;
@@ -823,22 +819,35 @@ impl State {
     fn read_chapter(&mut self, index: usize, settings: &crate::settings::Settings, resume: bool) {
         self.flush();
         self.translations.clear();
-        let Some(entry) = self.selected_entry() else {
+        let Some(mut entry) = self.selected_entry() else {
             return;
         };
         let Some(chapter) = entry.chapters.get(index).cloned() else {
             return;
         };
+        let book = entry.book.clone();
+        let progress = entry
+            .progress
+            .as_ref()
+            .filter(|p| resume && p.chapter == chapter.key())
+            .cloned()
+            .unwrap_or_default();
+        let mode = entry.mode.unwrap_or(settings.comics.mode);
+        let zoom = if entry.zoom > 0.0 {
+            entry.zoom.clamp(0.5, 3.0)
+        } else {
+            1.0
+        };
+        self.status.clear();
+        if !entry.read.contains(chapter.key()) || entry.has_updates() {
+            entry.mark_read(chapter.key());
+            self.save(entry);
+        }
         let Some(source) = self.source.clone() else {
             return;
         };
-        let book = entry.book.clone();
         let request_book = book.clone();
         let request_chapter = chapter.clone();
-        let progress = entry
-            .progress
-            .filter(|p| resume && p.chapter == chapter.key())
-            .unwrap_or_default();
         self.reader = Some(Reader {
             book,
             chapter,
@@ -846,18 +855,13 @@ impl State {
             urls: Vec::new(),
             current: progress.page,
             fraction: progress.fraction,
-            mode: entry.mode.unwrap_or(settings.comics.mode),
-            zoom: if entry.zoom > 0.0 {
-                entry.zoom.clamp(0.5, 3.0)
-            } else {
-                1.0
-            },
+            mode,
+            zoom,
             display: Display::Original,
             sidebar: false,
             sidebar_follow: true,
             restore: true,
             dirty: false,
-            completed: false,
             assets: HashMap::new(),
             visible: Vec::new(),
             jobs: HashMap::new(),
@@ -871,7 +875,6 @@ impl State {
             toolbar_until: Instant::now() + Duration::from_secs(3),
         });
         self.view = View::Reader;
-        self.status.clear();
     }
     fn resume(&mut self, entry: Entry, settings: &crate::settings::Settings) {
         let index = entry

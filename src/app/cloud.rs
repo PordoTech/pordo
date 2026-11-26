@@ -99,6 +99,27 @@ fn secrets(settings: &Settings) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn unset_secrets(
+    keys: &BTreeMap<String, String>,
+    journal: &sync::Journal,
+    vault: &crate::credentials::FileVault,
+) -> anyhow::Result<BTreeSet<String>> {
+    let candidates: Vec<_> = keys
+        .iter()
+        .filter(|(id, key)| key.is_empty() && journal.secret_hashes.contains_key(*id))
+        .map(|(id, _)| id)
+        .collect();
+    if candidates.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let stored = vault.stored_targets()?;
+    Ok(candidates
+        .into_iter()
+        .filter(|id| !stored.contains(&Settings::credential_target(id)))
+        .cloned()
+        .collect())
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KomiicCredentials {
     email: String,
@@ -347,17 +368,19 @@ impl App {
             return Ok(changed);
         };
         let accounts = self.cloud_accounts();
-        let keys_changed = self.settings.sync.sync_keys
-            && secrets(&self.settings)
-                .iter()
-                .chain(&accounts)
-                .any(|(id, key)| {
-                    (id.starts_with("account/")
+        let keys_changed = if self.settings.sync.sync_keys {
+            let keys = secrets(&self.settings);
+            let unset = unset_secrets(&keys, journal, &crate::credentials::SystemVault::local())?;
+            keys.iter().chain(&accounts).any(|(id, key)| {
+                !unset.contains(id)
+                    && (id.starts_with("account/")
                         || !key.is_empty()
                         || journal.secret_hashes.contains_key(id))
-                        && journal.secret_hashes.get(id)
-                            != Some(&crate::comics::digest(key.as_bytes()))
-                });
+                    && journal.secret_hashes.get(id) != Some(&crate::comics::digest(key.as_bytes()))
+            })
+        } else {
+            false
+        };
         Ok(changed || keys_changed)
     }
 
@@ -488,21 +511,34 @@ impl App {
         }
         self.cloud.startup = false;
         self.cloud.urgent = false;
-        if let Err(error) = self.capture_cloud(false).and_then(|_| {
+        let keys = secrets(&self.settings);
+        let prepared = self.capture_cloud(false).and_then(|_| {
             anyhow::ensure!(
                 self.settings.credential_error.is_none(),
                 "无法读取本机密钥，已暂停同步 / Credential storage is unavailable; sync paused"
             );
-            self.settings.sync.validate()
-        }) {
-            self.cloud.status = error.to_string();
-            self.cloud.failed = true;
-            self.cloud.changed = None;
-            return;
-        }
+            self.settings.sync.validate()?;
+            let mut journal = self.cloud.journal.clone().unwrap();
+            if self.settings.sync.sync_keys {
+                // An empty field with no local record can still be filled by
+                // cloud sync. Do not publish it as a cleared key.
+                for id in unset_secrets(&keys, &journal, &crate::credentials::SystemVault::local())?
+                {
+                    journal.secret_hashes.remove(&id);
+                }
+            }
+            Ok(journal)
+        });
+        let journal = match prepared {
+            Ok(journal) => journal,
+            Err(error) => {
+                self.cloud.status = error.to_string();
+                self.cloud.failed = true;
+                self.cloud.changed = None;
+                return;
+            }
+        };
         let settings = self.settings.sync.clone();
-        let journal = self.cloud.journal.clone().unwrap();
-        let keys = secrets(&self.settings);
         let accounts = self.cloud_accounts();
         self.cloud.requested_accounts = accounts.clone();
         self.cloud.requested_secrets = keys.clone();
@@ -1097,6 +1133,34 @@ fn apply_settings(settings: &mut Settings, values: &Snapshot) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_local_keys_are_distinct_from_explicitly_cleared_keys() {
+        use crate::credentials::Vault;
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        let vault = crate::credentials::FileVault::isolated(directory.join("credentials.json"));
+        let mut journal = sync::Journal::default();
+        journal
+            .secret_hashes
+            .insert("music/chksz".into(), "old".into());
+        journal
+            .secret_hashes
+            .insert("ai/known".into(), "old".into());
+        let keys = BTreeMap::from([
+            ("music/chksz".into(), String::new()),
+            ("ai/known".into(), String::new()),
+        ]);
+        vault
+            .set(&Settings::credential_target("ai/known"), None)
+            .unwrap();
+        assert_eq!(
+            unset_secrets(&keys, &journal, &vault).unwrap(),
+            BTreeSet::from(["music/chksz".into()])
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     fn app(ctx: &egui::Context, directory: &std::path::Path) -> App {
         let mut app = comic::visual_tests::settings_fixture(ctx);
         app.library = library::Library::open(directory.join("library.json"));

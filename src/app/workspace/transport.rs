@@ -102,7 +102,8 @@ impl App {
             );
         }
         let status = self.music_buffer_status();
-        if !status.is_empty() {
+        let opening = self.loading && self.workspace.page != Page::Listening;
+        if opening || !status.is_empty() {
             let mut status_ui = child(
                 root,
                 "music-buffer-status",
@@ -114,7 +115,19 @@ impl App {
                     ),
                 ),
             );
-            status_ui.add(egui::Label::new(RichText::new(status).small().color(MUTED)).truncate());
+            if opening {
+                design::loading_status(
+                    &mut status_ui,
+                    if status.is_empty() {
+                        l.text("加载中...", "Loading...")
+                    } else {
+                        &status
+                    },
+                );
+            } else {
+                status_ui
+                    .add(egui::Label::new(RichText::new(status).small().color(MUTED)).truncate());
+            }
         }
         let playing = self.player.as_ref().is_some_and(|p| p.is_playing());
         let (position, duration) = self

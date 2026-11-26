@@ -540,6 +540,11 @@ impl eframe::App for App {
             while let Some(event) = player.poll_event() {
                 match event {
                     Event::MediaInfo(info) => {
+                        let info = if let Some(path) = self.active_record_path() {
+                            self.metadata_cache.playback(path, info)
+                        } else {
+                            info
+                        };
                         let info = if let Some(song) = &self.online_origin {
                             let mut info = (*info).clone();
                             if info.title.as_ref().is_none_or(|s| s.is_empty()) {
@@ -550,13 +555,6 @@ impl eframe::App for App {
                             }
                             if info.album.as_ref().is_none_or(|s| s.is_empty()) {
                                 info.album = Some(song.album.clone());
-                            }
-                            if info.artwork.is_none() {
-                                info.artwork = self
-                                    .active_record_path()
-                                    .and_then(|path| self.metadata_cache.get(&path))
-                                    .and_then(|info| info.as_ref())
-                                    .and_then(|info| info.artwork.clone());
                             }
                             Arc::new(info)
                         } else {
@@ -592,9 +590,6 @@ impl eframe::App for App {
                                 egui::TextureOptions::LINEAR,
                             )
                         });
-                        if let Some(path) = self.active_record_path() {
-                            self.metadata_cache.playback(path, info.clone());
-                        }
                         self.media_info = Some(info);
                         if let Some((path, position)) = self.workspace.resume.take()
                             && (self.active_record_path().as_ref() == Some(&path)
@@ -681,7 +676,11 @@ impl eframe::App for App {
         if self.should_close(&ctx) {
             return;
         }
-        self.updater.poll();
+        if self.updater.poll() {
+            self.persist_queue();
+            self.request_close(&ctx);
+            return;
+        }
         self.poll_video_updates(&ctx);
         self.fullscreen = window::fullscreen_shortcuts(&ctx);
         if self.updater.dialog_visible {

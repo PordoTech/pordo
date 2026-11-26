@@ -406,7 +406,6 @@ fn reader_fixture(ctx: &egui::Context) -> State {
         sidebar_follow: true,
         restore: true,
         dirty: false,
-        completed: false,
         assets: HashMap::from([(
             7,
             Asset {
@@ -1305,6 +1304,221 @@ fn media_update_visuals() {
 }
 
 #[test]
+fn selecting_an_online_queue_item_keeps_its_artist_visible_when_artwork_arrives() {
+    let ctx = egui::Context::default();
+    let mut app = settings_fixture(&ctx);
+    app.workspace.page = workspace::Page::Listening;
+    app.queue_open = true;
+    let song = crate::music_sources::OnlineSong {
+        source: "chksz-163".into(),
+        id: "42".into(),
+        title: "Fixture song".into(),
+        artist: "Singer".into(),
+        album: "Release".into(),
+        ..Default::default()
+    };
+    let path = format!("online://{}", song.key());
+    app.library.records = vec![crate::app::library::Record {
+        path: path.clone(),
+        title: song.title.clone(),
+        online: Some(song.clone()),
+        music: true,
+        ..Default::default()
+    }];
+    app.queue.items = vec![
+        crate::queue::Item::online(song),
+        crate::queue::Item::file("fixture-next.mp3".into()),
+    ];
+    app.queue.select(1);
+    let size = vec2(1000.0, 700.0);
+    let detail = "Singer · Release";
+    app_frame(&ctx, &mut app, size, vec![]);
+    let before = app_frame(&ctx, &mut app, size, vec![]);
+    let position = settings_text(&before, detail).expect("queue shows the known artist and album");
+    app.queue.select(0);
+    app.metadata_cache.complete(
+        path,
+        Some(Arc::new(crate::media::Info {
+            kind: crate::media::Kind::Music,
+            title: None,
+            artist: None,
+            album: None,
+            artwork: Some(Arc::new(crate::media::Artwork {
+                width: 1,
+                height: 1,
+                rgba: vec![50, 100, 150, 255],
+            })),
+        })),
+    );
+    let after = app_frame(&ctx, &mut app, size, vec![]);
+    assert_eq!(settings_text(&after, detail), Some(position));
+}
+
+#[test]
+fn opening_media_uses_existing_header_or_playback_bar_space() {
+    for (size, queue) in [(vec2(1280.0, 800.0), false), (vec2(760.0, 540.0), true)] {
+        let ctx = egui::Context::default();
+        let mut app = settings_fixture(&ctx);
+        ctx.set_pixels_per_point(1.5);
+        app.workspace.page = workspace::Page::Listening;
+        app.queue_open = queue;
+        app.loading = true;
+        let output = app_frame(&ctx, &mut app, size, vec![]);
+        let status = settings_text(&output, "加载中...").expect("loading status is visible");
+        let tabs = settings_text(&output, "歌词").expect("lyrics tab is visible");
+        assert!(status.y < tabs.y - design::CONTROL_HEIGHT);
+        assert!(
+            output.shapes.iter().any(|shape| {
+                let Shape::Path(path) = &shape.shape else {
+                    return false;
+                };
+                let bounds = path.visual_bounding_rect();
+                (10.0..=16.0).contains(&bounds.width())
+                    && bounds.height() >= 10.0
+                    && bounds.right() < status.x
+                    && (bounds.center().y - status.y).abs() < 4.0
+            }),
+            "loading ring is visible from the first frame"
+        );
+
+        app.workspace.page = workspace::Page::Music;
+        let output = app_frame(&ctx, &mut app, size, vec![]);
+        let status = settings_text(&output, "加载中...").expect("loading status is visible");
+        assert!(status.y > size.y - 100.0);
+    }
+}
+
+#[test]
+fn refreshing_comic_directory_keeps_cached_chapters_in_place() {
+    let ctx = egui::Context::default();
+    let mut app = settings_fixture(&ctx);
+    app.workspace.page = workspace::Page::Comic;
+    app.queue_open = true;
+    let entry = app.comic.entries()[0].clone();
+    app.comic.open_book(entry.book);
+    let size = vec2(760.0, 650.0);
+    app_frame(&ctx, &mut app, size, vec![]);
+    let before = app_frame(&ctx, &mut app, size, vec![]);
+    app.comic.detail_job = Some(Job::spawn(|_| std::future::pending()));
+    let loading = app_frame(&ctx, &mut app, size, vec![]);
+    let status = settings_text(&loading, "加载中...").expect("directory loading is visible");
+    let volume_tab = settings_text(&loading, "单行本").expect("volume tab is visible");
+    assert!(status.x > volume_tab.x && (status.y - volume_tab.y).abs() < 2.0);
+    assert!(settings_text(&loading, "正文").is_none());
+    assert!(settings_text(&loading, &format!("{} 话", entry.chapters.len())).is_none());
+    let chapter = &entry.chapters[0].name;
+    let first = settings_text(&before, chapter).expect("cached chapter is visible");
+    assert_eq!(settings_text(&loading, chapter), Some(first));
+
+    app.comic
+        .selected
+        .as_mut()
+        .unwrap()
+        .url
+        .push_str("/uncached");
+    let waiting_for_directory = app_frame(&ctx, &mut app, size, vec![]);
+    for label in ["全部", "单话", "单行本", "加载中..."] {
+        assert!(settings_text(&waiting_for_directory, label).is_some());
+    }
+}
+
+#[test]
+fn clicking_a_comic_chapter_marks_it_read_before_images_load() {
+    let ctx = egui::Context::default();
+    let mut app = settings_fixture(&ctx);
+    app.workspace.page = workspace::Page::Comic;
+    let mut entry = app.comic.entries()[0].clone();
+    entry.set_favorite(true);
+    entry.chapters.truncate(3);
+    let [first, second, latest]: [Chapter; 3] = entry.chapters.clone().try_into().unwrap();
+    entry.new_unread = [&first, &second, &latest]
+        .into_iter()
+        .map(|chapter| chapter.key().to_owned())
+        .collect();
+    entry.progress = Some(Progress {
+        chapter: second.key().into(),
+        page: 2,
+        ..Default::default()
+    });
+    app.comic.save(entry.clone());
+    app.comic.open_book(entry.book);
+    let size = vec2(960.0, 720.0);
+    app_frame(&ctx, &mut app, size, vec![]);
+    for (chapter, has_updates) in [(&first, true), (&latest, false)] {
+        let output = app_frame(&ctx, &mut app, size, vec![]);
+        let point = settings_text(&output, &chapter.name).expect("chapter is visible");
+        for pressed in [true, false] {
+            app_frame(
+                &ctx,
+                &mut app,
+                size,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let current = app.comic.selected_entry().unwrap();
+        assert!(current.read.contains(chapter.key()));
+        assert!(!current.read.contains(second.key()));
+        assert_eq!(current.has_updates(), has_updates);
+        let progress = current.progress.unwrap();
+        assert_eq!(
+            (progress.chapter.as_str(), progress.page),
+            (second.key(), 2)
+        );
+    }
+}
+
+#[test]
+fn comic_directory_tabs_filter_chapters_and_volumes() {
+    let ctx = egui::Context::default();
+    let mut app = settings_fixture(&ctx);
+    app.workspace.page = workspace::Page::Comic;
+    let mut entry = app.comic.entries()[0].clone();
+    entry.chapters.truncate(2);
+    entry.chapters[0].name = "测试单话".into();
+    entry.chapters[1].name = "测试单行本".into();
+    entry.chapters[1].kind = domain::ChapterKind::Volume;
+    app.comic.save(entry.clone());
+    app.comic.open_book(entry.book);
+    let size = vec2(960.0, 720.0);
+    app_frame(&ctx, &mut app, size, vec![]);
+    for (label, chapter, volume) in [
+        ("全部", true, true),
+        ("单行本", false, true),
+        ("单话", true, false),
+    ] {
+        let output = app_frame(&ctx, &mut app, size, vec![]);
+        let point = settings_text(&output, label).expect("directory tab is visible");
+        for pressed in [true, false] {
+            app_frame(
+                &ctx,
+                &mut app,
+                size,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let selected = app_frame(&ctx, &mut app, size, vec![]);
+        assert_eq!(settings_text(&selected, "测试单话").is_some(), chapter);
+        assert_eq!(settings_text(&selected, "测试单行本").is_some(), volume);
+    }
+}
+
+#[test]
 fn populated_lyrics_never_cover_tabs_and_info_remains_clickable_at_every_scale() {
     for scale in [1.0, 1.5, 2.0] {
         for (size, queue) in [
@@ -1831,12 +2045,16 @@ fn comic_catalog_visuals() {
             ("all", None),
         ] {
             state.chapter_filter = kind;
+            if name == "chapters" {
+                state.detail_job = Some(Job::spawn(|_| std::future::pending()));
+            }
             capture.save(
                 &ctx,
                 [width, 650],
                 &directory.join(format!("komiic-detail-{name}-{width}.png")),
                 |ui| state.detail_ui(ui, &settings),
             );
+            state.detail_job = None;
         }
     }
     let ctx = egui::Context::default();

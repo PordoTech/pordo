@@ -8,7 +8,7 @@ use crate::{
         audio::{AudioChunks, Chunk, RATE},
     },
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -23,8 +23,27 @@ use std::{
 
 const WINDOW: f64 = 300.0;
 const CHUNK: f64 = 120.0;
+const FIRST_CHUNK: f64 = 60.0;
 const EDGE: f64 = 0.35;
+const FINAL_AUDIO_GAP: f64 = 0.25;
 pub(super) const MIN_SEGMENT: f64 = 3.0;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Failure {
+    Audio,
+    Service,
+    Response,
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Audio => "Could not extract audio for analysis",
+            Self::Service => "Audio analysis request failed",
+            Self::Response => "Invalid audio analysis response",
+        })
+    }
+}
 
 pub(super) struct Analysis {
     pub(super) job: Job<()>,
@@ -121,9 +140,17 @@ fn chunks(duration: f64, wanted: MissingMarkers) -> Vec<Range> {
     boundaries.dedup();
     let mut chunks = Vec::new();
     for bounds in boundaries.windows(2) {
-        let [start, end] = [bounds[0], bounds[1]];
+        let [mut start, end] = [bounds[0], bounds[1]];
         if !windows.iter().any(|r| r.includes(Range { start, end })) {
             continue;
+        }
+        if wanted.intro && start == 0.0 && end >= CHUNK {
+            // Get the first opening result sooner during normal playback.
+            chunks.push(Range {
+                start,
+                end: FIRST_CHUNK,
+            });
+            start = FIRST_CHUNK;
         }
         let count = ((end - start) / CHUNK).ceil() as usize;
         for i in 0..count {
@@ -314,7 +341,11 @@ impl Scan {
     async fn analyze(&self, range: Range, intro: bool, outro: bool) -> Result<Findings> {
         let source = self.source.clone();
         let stop = self.stop.clone();
-        let chunk = tokio::task::spawn_blocking(move || read_audio(&source, stop, range)).await??;
+        let duration = self.duration;
+        let chunk = tokio::task::spawn_blocking(move || read_audio(&source, stop, range, duration))
+            .await
+            .context(Failure::Audio)?
+            .context(Failure::Audio)?;
         ensure!(
             !self.stop.load(Ordering::Acquire),
             "Audio analysis cancelled"
@@ -323,11 +354,11 @@ impl Scan {
         let result = self
             .client
             .analyze_audio(&chunk, prompt, &self.stop)
-            .await?;
-        ensure!(result.len() <= 4096, "AI marker response is too large");
-        let text = crate::ai::model_json(&result)
-            .ok_or_else(|| anyhow::anyhow!("Incomplete AI marker response"))?;
-        Ok(serde_json::from_str(text)?)
+            .await
+            .context(Failure::Service)?;
+        ensure!(result.len() <= 4096, Failure::Response);
+        let text = crate::ai::model_json(&result).context(Failure::Response)?;
+        serde_json::from_str(text).context(Failure::Response)
     }
 
     fn publish(&self, kind: Kind, bounds: Bounds) {
@@ -379,18 +410,32 @@ impl Scan {
     }
 }
 
-fn read_audio(source: &Path, stop: Arc<AtomicBool>, range: Range) -> Result<Chunk> {
+fn read_audio(source: &Path, stop: Arc<AtomicBool>, range: Range, duration: f64) -> Result<Chunk> {
     let mut audio = AudioChunks::open(source, stop, CHUNK as usize)?;
     audio.set_range(range.start, Some(range.end))?;
-    let mut chunk = audio
+    let chunk = audio
         .next()?
         .ok_or_else(|| anyhow::anyhow!("No audio in the analysis range"))?;
+    fit_audio(chunk, range, duration)
+}
+
+fn fit_audio(mut chunk: Chunk, range: Range, duration: f64) -> Result<Chunk> {
     let samples = ((range.end - range.start) * f64::from(RATE)).round() as usize;
     chunk.samples.truncate(samples);
+    let at_end = range.end == duration;
+    // Bilibili's separate AAC track can end shortly before the video track.
+    let allowed_gap = if at_end {
+        (FINAL_AUDIO_GAP * f64::from(RATE)) as usize
+    } else {
+        RATE as usize / 50
+    };
     ensure!(
-        chunk.samples.len().abs_diff(samples) <= RATE as usize / 50,
+        samples - chunk.samples.len() <= allowed_gap,
         "Incomplete analysis audio"
     );
+    if at_end {
+        chunk.samples.resize(samples, 0.0);
+    }
     Ok(chunk)
 }
 
@@ -408,7 +453,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_short_aac_tail_is_aligned_without_accepting_truncated_audio() {
+        let range = Range {
+            start: 112.393,
+            end: 212.393,
+        };
+        let expected = 100 * RATE as usize;
+        let short_by = |milliseconds: usize| Chunk {
+            start: range.start,
+            samples: vec![0.5; expected - milliseconds * RATE as usize / 1_000],
+        };
+        let result = fit_audio(short_by(84), range, range.end).unwrap();
+        assert_eq!(result.samples.len(), expected);
+        assert_eq!(result.samples.last(), Some(&0.0));
+        assert!(fit_audio(short_by(84), range, 300.0).is_err());
+        assert!(fit_audio(short_by(500), range, range.end).is_err());
+    }
+
+    #[test]
     fn samples_only_requested_ends_and_never_uploads_overlap_twice() {
+        assert_eq!(
+            chunks(
+                900.0,
+                MissingMarkers {
+                    intro: true,
+                    outro: true
+                }
+            )[0]
+            .end,
+            FIRST_CHUNK
+        );
         for (duration, intro, outro, total) in [
             (900.0, true, true, 600.0),
             (420.0, true, true, 420.0),

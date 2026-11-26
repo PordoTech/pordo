@@ -931,6 +931,11 @@ impl App {
                     );
                 },
             );
+            if self.preferences_draft.video.skip
+                && let Some(status) = self.video_skip.ai_status_label(l)
+            {
+                ui.label(RichText::new(status).small().color(MUTED));
+            }
         }
     }
 

@@ -194,6 +194,12 @@ impl Library {
             let favorited_at = old.favorited_at;
             let online = old.online.clone();
             let video_cover = old.video_cover.clone();
+            if record.artist.trim().is_empty() {
+                record.artist = std::mem::take(&mut old.artist);
+            }
+            if record.album.trim().is_empty() {
+                record.album = std::mem::take(&mut old.album);
+            }
             *old = record;
             old.favorite = favorite;
             old.favorited_at = favorited_at;
@@ -252,9 +258,15 @@ impl Library {
                 return;
             }
             old.path = path;
-            old.title = song.title.clone();
-            old.artist = song.artist.clone();
-            old.album = song.album.clone();
+            for (stored, tag) in [
+                (&mut old.title, &song.title),
+                (&mut old.artist, &song.artist),
+                (&mut old.album, &song.album),
+            ] {
+                if !tag.trim().is_empty() {
+                    stored.clone_from(tag);
+                }
+            }
             old.online = Some(song);
             old.music = true;
         } else if let Some(old) = self.records.iter_mut().find(|r| r.path == path) {
@@ -612,18 +624,29 @@ mod tests {
         library.remember(Record {
             path: "old.flac".into(),
             title: "Refreshed".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
             played: u64::MAX,
             music: true,
             ..Default::default()
         });
-        library.bind_online(
-            "old.flac".into(),
-            crate::music_sources::OnlineSong {
-                source: "chksz-163".into(),
-                id: "1".into(),
-                ..Default::default()
-            },
-        );
+        let mut song = crate::music_sources::OnlineSong {
+            source: "chksz-163".into(),
+            id: "1".into(),
+            ..Default::default()
+        };
+        library.bind_online("old.flac".into(), song.clone());
+        song.title = "Online title".into();
+        library.bind_online("old.flac".into(), song);
+        assert_eq!(library.records[0].artist, "Artist");
+        assert_eq!(library.records[0].album, "Album");
+        library.remember(Record {
+            path: "old.flac".into(),
+            title: "Online title".into(),
+            played: u64::MAX,
+            music: true,
+            ..Default::default()
+        });
         library.records.push(Record {
             path: "new.mp4".into(),
             favorited_at: at + 1,
@@ -636,6 +659,8 @@ mod tests {
         sort_favorites(&mut library.records);
         assert_eq!(library.records[0].path, "new.mp4");
         assert_eq!(library.records[1].favorited_at, at);
+        assert_eq!(library.records[1].artist, "Artist");
+        assert_eq!(library.records[1].album, "Album");
         library.toggle_favorite("old.flac", "Old", true);
         library.toggle_favorite("old.flac", "Old", true);
         assert!(library.records[1].favorited_at > at);

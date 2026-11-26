@@ -524,13 +524,55 @@ impl State {
                 }
             });
         });
+        let entry = self.selected_entry();
+        ui.add_space(4.0);
+        ui.separator();
+        ui.add_space(4.0);
+        let labels = [
+            l.text("全部", "All"),
+            l.text("单话", "Chapters"),
+            l.text("单行本", "Volumes"),
+        ];
+        let kinds = [
+            None,
+            Some(domain::ChapterKind::Chapter),
+            Some(domain::ChapterKind::Volume),
+        ];
+        let mut selected = kinds
+            .iter()
+            .position(|kind| *kind == self.chapter_filter)
+            .unwrap_or_default();
+        let right = ui.available_rect_before_wrap().right();
+        let tabs = ui
+            .add_enabled_ui(entry.is_some(), |ui| {
+                design::tabs(ui, &mut selected, &labels)
+            })
+            .inner;
+        self.chapter_filter = kinds[selected];
+        let actions = Rect::from_min_max(
+            pos2(right - design::CONTROL_HEIGHT * 2.0 - 6.0, tabs.top()),
+            pos2(right, tabs.bottom()),
+        );
         if self.detail_job.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(l.text("正在获取目录…", "Loading chapters…"));
-            });
+            let status = Rect::from_min_max(
+                pos2(tabs.right() + 4.0, tabs.top()),
+                pos2(
+                    if entry.is_some() {
+                        actions.left()
+                    } else {
+                        right
+                    },
+                    tabs.bottom(),
+                ),
+            );
+            if status.width() >= 16.0 {
+                let mut loading = workspace::child(ui, "comic-directory-loading", status);
+                loading.horizontal_centered(|ui| {
+                    design::loading_status(ui, l.text("加载中...", "Loading..."));
+                });
+            }
         }
-        let Some(entry) = self.selected_entry() else {
+        let Some(entry) = entry else {
             if self.detail_job.is_none()
                 && design::control(
                     ui,
@@ -545,83 +587,43 @@ impl State {
             }
             return;
         };
-        ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(
-                RichText::new(format!(
-                    "{} {}",
-                    entry.chapters.len(),
-                    l.text("话", "chapters")
-                ))
-                .color(MUTED),
-            );
-            if entry
-                .chapters
-                .iter()
-                .any(|c| c.kind == domain::ChapterKind::Volume)
+        let mut actions = workspace::child(ui, "comic-directory-actions", actions);
+        actions.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if design::icon_button(
+                ui,
+                icons::FUNNEL,
+                l.text("只看未读", "Unread only"),
+                self.unread_only,
+            )
+            .clicked()
             {
-                let label = match self.chapter_filter {
-                    Some(domain::ChapterKind::Chapter) => l.text("单话", "Chapters"),
-                    Some(domain::ChapterKind::Volume) => l.text("单行本", "Volumes"),
-                    None => l.text("全部", "All"),
-                };
-                let drop_w = (design::combo_width(ui, label) + 12.0).max(96.0);
-                design::dropdown_ui(ui, "comic-chapter-kind", drop_w, label, |ui| {
-                    for (kind, name) in [
-                        (
-                            Some(domain::ChapterKind::Chapter),
-                            l.text("单话", "Chapters"),
-                        ),
-                        (
-                            Some(domain::ChapterKind::Volume),
-                            l.text("单行本", "Volumes"),
-                        ),
-                        (None, l.text("全部", "All")),
-                    ] {
-                        design::menu_value(ui, &mut self.chapter_filter, kind, name);
-                    }
-                });
+                self.unread_only = !self.unread_only;
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                if design::icon_button(
-                    ui,
-                    icons::FUNNEL,
-                    l.text("只看未读", "Unread only"),
-                    self.unread_only,
-                )
-                .clicked()
-                {
-                    self.unread_only = !self.unread_only;
-                }
-                if design::icon_button(
-                    ui,
-                    if self.reverse {
-                        icons::SORT_DESCENDING
-                    } else {
-                        icons::SORT_ASCENDING
-                    },
-                    if self.reverse {
-                        l.text(
-                            "当前倒序（点击切为正序）",
-                            "Descending (click for ascending)",
-                        )
-                    } else {
-                        l.text(
-                            "当前正序（点击切为倒序）",
-                            "Ascending (click for descending)",
-                        )
-                    },
-                    self.reverse,
-                )
-                .clicked()
-                {
-                    self.set_directory_reverse(!self.reverse);
-                }
-            });
+            if design::icon_button(
+                ui,
+                if self.reverse {
+                    icons::SORT_DESCENDING
+                } else {
+                    icons::SORT_ASCENDING
+                },
+                if self.reverse {
+                    l.text(
+                        "当前倒序（点击切为正序）",
+                        "Descending (click for ascending)",
+                    )
+                } else {
+                    l.text(
+                        "当前正序（点击切为倒序）",
+                        "Ascending (click for descending)",
+                    )
+                },
+                self.reverse,
+            )
+            .clicked()
+            {
+                self.set_directory_reverse(!self.reverse);
+            }
         });
         ui.add_space(6.0);
         let mut chapters: Vec<_> = entry
@@ -653,16 +655,15 @@ impl State {
                 if list.is_empty() {
                     continue;
                 }
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(match section {
-                        1 => l.text("番外 / 附录", "Extras"),
-                        2 => l.text("单行本", "Volumes"),
-                        _ => l.text("正文", "Chapters"),
-                    })
-                    .strong()
-                    .color(MUTED),
-                );
+                let heading = match section {
+                    1 => Some(l.text("番外 / 附录", "Extras")),
+                    2 => Some(l.text("单行本", "Volumes")),
+                    _ => None,
+                };
+                if let Some(heading) = heading {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(heading).strong().color(MUTED));
+                }
                 let columns = (ui.available_width() / 170.0).floor().max(1.0) as usize;
                 let width = (ui.available_width() - 10.0 * (columns - 1) as f32) / columns as f32;
                 for row in list.chunks(columns) {

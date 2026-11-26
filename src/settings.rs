@@ -247,35 +247,17 @@ impl Settings {
             id
         )
     }
+    pub(crate) fn credential_target(id: &str) -> String {
+        Self::secret_target(&Self::path(), id)
+    }
     pub(crate) fn bilibili_target() -> String {
-        Self::secret_target(&Self::path(), "video/bilibili/session")
+        Self::credential_target("video/bilibili/session")
     }
     pub fn load_credentials(&mut self, vault: &impl crate::credentials::Vault) -> Result<()> {
         let path = Self::path();
         let result = self.load_credentials_from(vault, &path);
         self.credential_error = result.as_ref().err().map(ToString::to_string);
         result
-    }
-    pub(crate) fn reenter_credentials(&mut self) -> Result<()> {
-        let path = Self::path();
-        let mut ids = vec![
-            "music/chksz".to_owned(),
-            format!(
-                "comic/komiic/{}/password",
-                self.comics.komiic.credential_id()
-            ),
-            format!("sync/{}/password", self.sync.account()),
-            format!("sync/{}/passphrase", self.sync.account()),
-        ];
-        ids.extend(self.ai.providers.iter().map(|p| format!("ai/{}", p.id)));
-        let targets: Vec<_> = ids
-            .iter()
-            .map(|id| Self::secret_target(&path, id))
-            .collect();
-        // Leave legacy OS credentials intact. Explicit local misses prevent any
-        // future fallback, including after the user deliberately clears a key.
-        crate::credentials::SystemVault::local().finish_migration(&targets)?;
-        self.load_credentials(&crate::credentials::SystemVault)
     }
     fn load_credentials_from(
         &mut self,
@@ -290,6 +272,15 @@ impl Settings {
         self.music.api_key = vault
             .get(&Self::secret_target(path, "music/chksz"))?
             .unwrap_or_default();
+        self.load_account_credentials(vault, path)?;
+        self.credential_error = None;
+        Ok(())
+    }
+    fn load_account_credentials(
+        &mut self,
+        vault: &impl crate::credentials::Vault,
+        path: &std::path::Path,
+    ) -> Result<()> {
         self.comics.komiic.password = vault
             .get(&Self::secret_target(
                 path,
@@ -311,7 +302,6 @@ impl Settings {
                 &format!("sync/{}/passphrase", self.sync.account()),
             ))?
             .unwrap_or_default();
-        self.credential_error = None;
         Ok(())
     }
     fn save_with(
@@ -324,9 +314,31 @@ impl Settings {
             "无法读取密钥，请重新加载后保存 / Reload credentials before saving"
         );
         self.ai.validate()?;
-        self.comics.komiic.validate()?;
-        if self.sync.enabled {
-            self.sync.validate()?;
+        let old = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok());
+        let komiic = self.comics.komiic.validate();
+        let sync = if self.sync.enabled {
+            self.sync.validate()
+        } else {
+            Ok(())
+        };
+        if komiic.is_err() || sync.is_err() {
+            // Existing services may await credentials. Validate account edits
+            // while allowing unrelated settings to be saved in that profile.
+            if let Some(saved) = &old {
+                let mut saved = saved.clone();
+                saved.load_account_credentials(vault, path)?;
+                if self.comics.komiic != saved.comics.komiic {
+                    komiic?;
+                }
+                if self.sync != saved.sync {
+                    sync?;
+                }
+            } else {
+                komiic?;
+                sync?;
+            }
         }
         let mut changes = vec![(
             Self::secret_target(path, "music/chksz"),
@@ -349,9 +361,7 @@ impl Settings {
                 provider.api_key.clone(),
             ));
         }
-        if let Ok(bytes) = std::fs::read(path)
-            && let Ok(old) = serde_json::from_slice::<Self>(&bytes)
-        {
+        if let Some(old) = old {
             if old.comics.komiic.credential_id() != self.comics.komiic.credential_id() {
                 changes.push((
                     Self::secret_target(
@@ -551,6 +561,49 @@ mod tests {
         );
         std::fs::remove_dir_all(directory).unwrap();
     }
+    #[test]
+    fn missing_account_credentials_do_not_block_saving_an_ai_key() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("settings-test-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("settings.json");
+        let vault = crate::credentials::FileVault::isolated(directory.join("credentials.json"));
+        let mut settings = Settings::default();
+        settings.sync.enabled = true;
+        settings.sync.sync_keys = true;
+        settings.sync.base_url = "https://example.test/dav".into();
+        settings.sync.username = "reader".into();
+        settings.comics.komiic.email = "reader@example.test".into();
+        settings.comics.komiic.auto_login = true;
+        settings.ai.providers.push(crate::ai::Provider {
+            id: "test-ai".into(),
+            name: "Test AI".into(),
+            ..Default::default()
+        });
+        settings.write_json(&path).unwrap();
+
+        settings.load_credentials_from(&vault, &path).unwrap();
+        settings.ai.providers[0].api_key = "fixture-key".into();
+        settings.save_with(&vault, &path).unwrap();
+
+        let mut reloaded: Settings =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        reloaded.load_credentials_from(&vault, &path).unwrap();
+        assert_eq!(reloaded.ai.providers[0].api_key, "fixture-key");
+        assert!(reloaded.sync.enabled && reloaded.sync.password.is_empty());
+        assert!(reloaded.comics.komiic.auto_login && reloaded.comics.komiic.password.is_empty());
+        assert!(reloaded.sync.validate().is_err());
+
+        reloaded.sync.username = "another-reader".into();
+        assert!(reloaded.save_with(&vault, &path).is_err());
+        reloaded.sync.password = "fixture-password".into();
+        reloaded.sync.passphrase = "fixture-passphrase".into();
+        reloaded.save_with(&vault, &path).unwrap();
+        reloaded.sync.password.clear();
+        assert!(reloaded.save_with(&vault, &path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn language_and_parallelism_roundtrip_without_credentials() {
         let s = Settings {

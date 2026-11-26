@@ -6,9 +6,43 @@ use semver::Version;
 use serde::Deserialize;
 use std::{io::Write, path::PathBuf, time::Duration};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 pub const REPOSITORY: &str = "https://github.com/PordoTech/pordo";
 const API: &str = "https://api.github.com/repos/PordoTech/pordo/releases/latest";
 const MAX_SIZE: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum Platform {
+    WindowsX64,
+    MacArm64,
+    MacX64,
+}
+
+impl Platform {
+    fn current() -> Option<Self> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("windows", "x86_64") => Some(Self::WindowsX64),
+            ("macos", "aarch64") => Some(Self::MacArm64),
+            ("macos", "x86_64") => Some(Self::MacX64),
+            _ => None,
+        }
+    }
+
+    fn asset_name(self, version: &str) -> String {
+        let suffix = match self {
+            Self::WindowsX64 => "windows-x86_64-setup.exe",
+            Self::MacArm64 => "macos-aarch64.zip",
+            Self::MacX64 => "macos-x86_64.zip",
+        };
+        format!("pordo-{version}-{suffix}")
+    }
+}
+
+pub fn supported() -> bool {
+    Platform::current().is_some()
+}
 
 #[derive(Clone, Deserialize)]
 struct Asset {
@@ -30,11 +64,13 @@ pub struct Update {
     pub version: String,
     pub notes: String,
     asset: Asset,
+    platform: Platform,
 }
 enum Event {
     Checked(Result<Option<Update>, String>),
     Progress(u64, u64),
     Downloaded(Result<PathBuf, String>),
+    InstallerLaunched(Result<(), String>),
 }
 #[derive(Default)]
 pub enum Status {
@@ -48,6 +84,7 @@ pub enum Status {
         total: u64,
     },
     Ready,
+    Installing,
     Failed(String),
 }
 pub struct Updater {
@@ -60,10 +97,15 @@ pub struct Updater {
     prompted_version: Option<String>,
     manual_check: bool,
     repaint: eframe::egui::Context,
+    #[cfg(target_os = "macos")]
+    startup_health: Option<PathBuf>,
+    pub rollback_notice: bool,
 }
 impl Updater {
     pub fn new(automatic: bool, repaint: eframe::egui::Context) -> Self {
         let (tx, rx) = unbounded();
+        let rollback_notice =
+            cfg!(target_os = "macos") && std::env::var_os("PORDO_UPDATE_ROLLBACK").is_some();
         let mut value = Self {
             status: Status::Idle,
             update: None,
@@ -74,16 +116,33 @@ impl Updater {
             prompted_version: None,
             manual_check: false,
             repaint,
+            #[cfg(target_os = "macos")]
+            startup_health: macos::startup_marker(),
+            rollback_notice,
         };
-        if automatic && cfg!(target_os = "windows") && !cfg!(debug_assertions) {
+        if automatic && supported() && !cfg!(debug_assertions) && !rollback_notice {
             value.start_check(false);
         }
         value
     }
     pub fn busy(&self) -> bool {
-        matches!(self.status, Status::Checking | Status::Downloading { .. })
+        matches!(
+            self.status,
+            Status::Checking | Status::Downloading { .. } | Status::Installing
+        )
     }
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some(marker) = &self.startup_health {
+            if self.repaint.cumulative_frame_nr() == 0 {
+                self.repaint.request_repaint();
+            } else {
+                if let Err(error) = macos::mark_healthy(marker) {
+                    eprintln!("Could not confirm update startup: {error:#}");
+                }
+                self.startup_health = None;
+            }
+        }
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 Event::Checked(Ok(update)) => {
@@ -101,9 +160,9 @@ impl Updater {
                     };
                     self.update = update;
                 }
-                Event::Checked(Err(error)) | Event::Downloaded(Err(error)) => {
-                    self.status = Status::Failed(error)
-                }
+                Event::Checked(Err(error))
+                | Event::Downloaded(Err(error))
+                | Event::InstallerLaunched(Err(error)) => self.status = Status::Failed(error),
                 Event::Progress(received, total) => {
                     self.status = Status::Downloading { received, total }
                 }
@@ -111,8 +170,10 @@ impl Updater {
                     self.installer = Some(path);
                     self.status = Status::Ready;
                 }
+                Event::InstallerLaunched(Ok(())) => return true,
             }
         }
+        false
     }
     pub fn check(&mut self) {
         self.start_check(true);
@@ -154,20 +215,33 @@ impl Updater {
             repaint.request_repaint();
         });
     }
-    pub fn install(&mut self) -> Result<()> {
-        let update = self.update.as_ref().context("No update selected")?;
-        let installer = self
-            .installer
-            .as_ref()
-            .context("Download the update first")?;
-        let result = launch_installer(update, installer);
-        if let Err(error) = &result {
-            self.status = Status::Failed(format!("{error:#}"));
+    pub fn install(&mut self) {
+        if self.busy() {
+            return;
         }
-        result
+        let (Some(update), Some(installer)) = (self.update.clone(), self.installer.clone()) else {
+            return;
+        };
+        self.status = Status::Installing;
+        let tx = self.tx.clone();
+        let repaint = self.repaint.clone();
+        spawn(move || {
+            let result = launch_installer(&update, &installer);
+            let _ = tx.send(Event::InstallerLaunched(
+                result.map_err(|e| format!("{e:#}")),
+            ));
+            repaint.request_repaint();
+        });
     }
     pub fn can_install(&self) -> bool {
         self.installer.is_some()
+    }
+    pub fn install_location_error(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Status::Failed(error) = &self.status {
+            return error == macos::INSTALL_LOCATION;
+        }
+        false
     }
     #[cfg(test)]
     pub(crate) fn offer_fixture(&mut self) {
@@ -175,6 +249,7 @@ impl Updater {
             version: "9.0.0".into(),
             notes: "## Fix\n\n- Keep controls visible.\n\n<details>\n<summary>中文更新说明</summary>\n\n## Fix\n\n- 修复按钮遮挡。\n\n</details>".into(),
             asset: Asset { name: String::new(), browser_download_url: String::new(), digest: None, size: 0 },
+            platform: Platform::WindowsX64,
         })))).unwrap();
         self.poll();
     }
@@ -211,6 +286,8 @@ fn client(timeout: Duration) -> Result<reqwest::Client> {
         .build()?)
 }
 async fn check() -> Result<Option<Update>> {
+    let platform =
+        Platform::current().context("In-app updates are unavailable on this platform")?;
     let response = client(Duration::from_secs(20))?
         .get(API)
         .header("Accept", "application/vnd.github+json")
@@ -230,9 +307,13 @@ async fn check() -> Result<Option<Update>> {
         );
         bytes.extend_from_slice(&chunk);
     }
-    select_release(serde_json::from_slice(&bytes)?, env!("CARGO_PKG_VERSION"))
+    select_release(
+        serde_json::from_slice(&bytes)?,
+        env!("CARGO_PKG_VERSION"),
+        platform,
+    )
 }
-fn select_release(release: Release, current: &str) -> Result<Option<Update>> {
+fn select_release(release: Release, current: &str, platform: Platform) -> Result<Option<Update>> {
     if release.draft || release.prerelease {
         return Ok(None);
     }
@@ -244,16 +325,17 @@ fn select_release(release: Release, current: &str) -> Result<Option<Update>> {
     if !version.pre.is_empty() || !version.build.is_empty() || version <= Version::parse(current)? {
         return Ok(None);
     }
-    let expected = format!("pordo-{version}-windows-x86_64-setup.exe");
+    let expected = platform.asset_name(tag);
     let asset = release
         .assets
         .into_iter()
         .find(|asset| asset.name == expected)
-        .context("Release is missing the Windows x64 installer")?;
+        .with_context(|| format!("Release is missing {expected}"))?;
     let update = Update {
         version: version.to_string(),
         notes: release.body.unwrap_or_default(),
         asset,
+        platform,
     };
     validate(&update)?;
     Ok(Some(update))
@@ -261,7 +343,7 @@ fn select_release(release: Release, current: &str) -> Result<Option<Update>> {
 fn validate(update: &Update) -> Result<()> {
     let asset = &update.asset;
     ensure!(
-        asset.name == format!("pordo-{}-windows-x86_64-setup.exe", update.version),
+        asset.name == update.platform.asset_name(&update.version),
         "Unexpected installer name"
     );
     ensure!(
@@ -306,12 +388,14 @@ fn verify(update: &Update, size: u64, hash: &str) -> Result<()> {
 }
 async fn download(update: &Update, tx: &Sender<Event>) -> Result<PathBuf> {
     validate(update)?;
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .context("LOCALAPPDATA is unavailable")?;
-    let cache = pordo_core::paths::application_directory(&base)
-        .join("updates")
-        .join(&update.version);
+    let data_root = match update.platform {
+        Platform::WindowsX64 => {
+            let base = std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?;
+            pordo_core::paths::application_directory(std::path::Path::new(&base))
+        }
+        Platform::MacArm64 | Platform::MacX64 => pordo_core::paths::root(),
+    };
+    let cache = data_root.join("updates").join(&update.version);
     std::fs::create_dir_all(&cache)?;
     let path = cache.join(&update.asset.name);
     let partial = path.with_extension(format!("{}.part", std::process::id()));
@@ -355,9 +439,9 @@ async fn download(update: &Update, tx: &Sender<Event>) -> Result<PathBuf> {
     }
     outcome
 }
-#[cfg(windows)]
-fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
-    use std::{io::Read, os::windows::process::CommandExt};
+#[cfg(any(windows, target_os = "macos"))]
+fn verify_file(update: &Update, path: &std::path::Path) -> Result<()> {
+    use std::io::Read;
     let mut file = std::fs::File::open(path)?;
     let mut hash = DigestContext::new(&SHA256);
     let mut size = 0;
@@ -371,7 +455,13 @@ fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
         ensure!(size <= MAX_SIZE, "Installer too large");
         hash.update(&buffer[..n]);
     }
-    verify(update, size, &crate::crypto::digest_hex(hash.finish()))?;
+    verify(update, size, &crate::crypto::digest_hex(hash.finish()))
+}
+
+#[cfg(windows)]
+fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    verify_file(update, path)?;
     let executable = std::env::current_exe()?;
     let install_dir = executable
         .parent()
@@ -403,9 +493,12 @@ fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
         .context("Unable to start update installer")?;
     Ok(())
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+use macos::launch_installer;
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn launch_installer(_: &Update, _: &std::path::Path) -> Result<()> {
-    anyhow::bail!("Automatic installation currently supports Windows only")
+    anyhow::bail!("In-app installation is unavailable on this platform")
 }
 
 pub fn localized_notes(notes: &str, chinese: bool) -> &str {
@@ -452,8 +545,15 @@ mod tests {
             .unwrap();
         updater.poll();
         assert!(updater.can_install());
-        updater.status = Status::Failed("installer failed".into());
+        updater
+            .tx
+            .send(Event::InstallerLaunched(Err("installer failed".into())))
+            .unwrap();
+        assert!(!updater.poll());
+        assert!(matches!(updater.status, Status::Failed(_)));
         assert!(updater.can_install());
+        updater.tx.send(Event::InstallerLaunched(Ok(()))).unwrap();
+        assert!(updater.poll());
         updater.dialog_visible = false;
         updater
             .tx
@@ -462,9 +562,9 @@ mod tests {
         updater.poll();
         assert!(!updater.dialog_visible);
     }
-    fn release(version: &str) -> Release {
+    fn release(version: &str, platform: Platform) -> Release {
         let data = b"installer";
-        let name = format!("pordo-{version}-windows-x86_64-setup.exe");
+        let name = platform.asset_name(version);
         Release {
             tag_name: format!("v{version}"),
             body: None,
@@ -480,44 +580,81 @@ mod tests {
     }
     #[test]
     fn releases_require_new_stable_version_and_trusted_installer() {
+        use Platform::WindowsX64;
         assert!(
-            select_release(release("0.10.0"), "0.9.0")
+            select_release(release("0.10.0", WindowsX64), "0.9.0", WindowsX64)
                 .unwrap()
                 .is_some()
         );
-        assert!(select_release(release("0.1.0"), "0.1.0").unwrap().is_none());
-        assert!(select_release(release("0.1.0"), "0.2.0").unwrap().is_none());
-        let mut draft = release("0.2.0");
+        assert!(
+            select_release(release("0.1.0", WindowsX64), "0.1.0", WindowsX64)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            select_release(release("0.1.0", WindowsX64), "0.2.0", WindowsX64)
+                .unwrap()
+                .is_none()
+        );
+        let mut draft = release("0.2.0", WindowsX64);
         draft.draft = true;
-        assert!(select_release(draft, "0.1.0").unwrap().is_none());
-        let mut bad = release("0.2.0");
+        assert!(
+            select_release(draft, "0.1.0", WindowsX64)
+                .unwrap()
+                .is_none()
+        );
+        let mut bad = release("0.2.0", WindowsX64);
         bad.assets[0].digest = None;
-        assert!(select_release(bad, "0.1.0").is_err());
+        assert!(select_release(bad, "0.1.0", WindowsX64).is_err());
         for repository in [
             "AnotherOwner/pordo",
             "PordoTech/other",
             "PordoTech/pordo-fork",
             "L-Chris/replayer",
         ] {
-            let mut bad = release("0.2.0");
+            let mut bad = release("0.2.0", WindowsX64);
             bad.assets[0].browser_download_url = format!(
                 "https://github.com/{repository}/releases/download/v0.2.0/{}",
                 bad.assets[0].name,
             );
-            assert!(select_release(bad, "0.1.0").is_err());
+            assert!(select_release(bad, "0.1.0", WindowsX64).is_err());
         }
-        let mut bad = release("0.2.0");
+        let mut bad = release("0.2.0", WindowsX64);
         bad.assets[0].browser_download_url = bad.assets[0]
             .browser_download_url
             .replace("github.com", "evil.example");
-        assert!(select_release(bad, "0.1.0").is_err());
-        let mut bad = release("0.2.0");
+        assert!(select_release(bad, "0.1.0", WindowsX64).is_err());
+        let mut bad = release("0.2.0", WindowsX64);
         bad.assets[0].size = MAX_SIZE + 1;
-        assert!(select_release(bad, "0.1.0").is_err());
+        assert!(select_release(bad, "0.1.0", WindowsX64).is_err());
+    }
+    #[test]
+    fn macos_offer_matches_the_running_binary_architecture() {
+        use Platform::{MacArm64, MacX64};
+        for (platform, another, suffix) in
+            [(MacArm64, MacX64, "aarch64"), (MacX64, MacArm64, "x86_64")]
+        {
+            let mut mac = release("0.2.0", platform);
+            mac.assets
+                .insert(0, release("0.2.0", another).assets.remove(0));
+            let expect = format!("pordo-0.2.0-macos-{suffix}.zip");
+            assert_eq!(
+                select_release(mac, "0.1.0", platform)
+                    .unwrap()
+                    .unwrap()
+                    .asset
+                    .name,
+                expect
+            );
+            assert!(select_release(release("0.2.0", another), "0.1.0", platform).is_err());
+        }
     }
     #[test]
     fn installer_integrity_and_localized_notes() {
-        let update = select_release(release("0.2.0"), "0.1.0").unwrap().unwrap();
+        use Platform::WindowsX64;
+        let update = select_release(release("0.2.0", WindowsX64), "0.1.0", WindowsX64)
+            .unwrap()
+            .unwrap();
         assert!(verify(&update, 9, &crate::crypto::sha256_hex(b"installer")).is_ok());
         assert!(verify(&update, 9, &crate::crypto::sha256_hex(b"tampered!")).is_err());
         assert!(verify(&update, 8, &crate::crypto::sha256_hex(b"installer")).is_err());

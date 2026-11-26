@@ -891,7 +891,7 @@ pub struct TabItem<'a> {
     pub tooltip: Option<&'a str>,
 }
 
-pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
+pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> egui::Rect {
     let items: Vec<_> = labels
         .iter()
         .map(|label| TabItem {
@@ -903,15 +903,15 @@ pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
     tabs_with(ui, selected, &items)
 }
 
-/// Horizontal tab bar supporting an optional top-right red dot badge and per-tab tooltip.
-pub fn tabs_with(ui: &mut egui::Ui, selected: &mut usize, items: &[TabItem<'_>]) -> bool {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), egui::Sense::hover());
+/// Draw a horizontal tab bar and return the bounds occupied by its tabs.
+pub fn tabs_with(ui: &mut egui::Ui, selected: &mut usize, items: &[TabItem<'_>]) -> egui::Rect {
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), CONTROL_HEIGHT), Sense::hover());
     ui.painter().line_segment(
         [rect.left_bottom(), rect.right_bottom()],
         Stroke::new(1.0, LINE),
     );
     let mut x = rect.min.x;
-    let mut changed = false;
     for (index, item) in items.iter().enumerate() {
         let text = ui.painter().layout_no_wrap(
             item.label.into(),
@@ -920,7 +920,7 @@ pub fn tabs_with(ui: &mut egui::Ui, selected: &mut usize, items: &[TabItem<'_>])
         );
         let text_size = text.size();
         let width = (text_size.x + 20.0).max(54.0);
-        let tab = egui::Rect::from_min_size(egui::pos2(x, rect.min.y), vec2(width, 36.0));
+        let tab = egui::Rect::from_min_size(pos2(x, rect.min.y), vec2(width, CONTROL_HEIGHT));
         let mut response = ui
             .interact(tab, ui.id().with(("tab", index)), egui::Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -964,12 +964,11 @@ pub fn tabs_with(ui: &mut egui::Ui, selected: &mut usize, items: &[TabItem<'_>])
             );
         }
         if response.clicked() {
-            changed |= *selected != index;
             *selected = index;
         }
         x += width + 6.0;
     }
-    changed
+    egui::Rect::from_min_max(rect.min, pos2((x - 6.0).max(rect.min.x), rect.max.y))
 }
 
 /// Crop artwork to fill a tile with per-corner rounding for music covers,
@@ -1100,6 +1099,31 @@ pub fn compact_icon_button(
     icon_button_sized(ui, 30.0, 1.0, active, tooltip, |p, r, c| {
         super::icons::paint(p, r, c, glyph);
     })
+}
+
+pub fn loading_status(ui: &mut egui::Ui, message: &str) {
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), 16.0),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (icon, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+            response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator));
+            if ui.is_rect_visible(icon) {
+                let rotation = ui.input(|i| i.time.rem_euclid(1.0) as f32);
+                let points = (0..=16)
+                    .map(|i| {
+                        let turns = rotation + i as f32 * (0.75 / 16.0);
+                        icon.center() + Vec2::angled(turns * std::f32::consts::TAU) * 6.0
+                    })
+                    .collect();
+                ui.painter()
+                    .add(egui::Shape::line(points, Stroke::new(1.75, ACCENT)));
+                ui.request_repaint();
+            }
+            ui.add(egui::Label::new(egui::RichText::new(message).small().color(MUTED)).truncate());
+        },
+    );
 }
 
 pub fn primary_icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str) -> egui::Response {

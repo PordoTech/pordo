@@ -35,7 +35,7 @@ Windows builds through v0.5.1 validate updates against the former repository pat
 
 On macOS, drag `Pordo.app` into Applications. The app includes its playback dependencies. Downloaded builds are currently ad-hoc signed; macOS may ask you to allow the app in **System Settings → Privacy & Security**.
 
-**Platform notes:** Windows uses Credential Manager and supports installing updates from Settings → About. macOS uses Keychain; download updates from Releases. Android stores credentials with Android KeyStore protection and uses a persistent release signing key for APK updates. See [Android setup and development](docs/android.md) for supported features and signing details.
+**Platform notes:** Windows and macOS support installing updates from Settings → About and store credentials in a separate local file. Android stores credentials with Android KeyStore protection and uses a persistent release signing key for APK updates. See [Android setup and development](docs/android.md) for supported features and signing details.
 
 Open a file or drop it onto the window to begin. Use **F11** for full screen and **Esc** to leave it. During media playback, **Space** pauses/resumes, the arrow keys seek and **M** toggles mute.
 
